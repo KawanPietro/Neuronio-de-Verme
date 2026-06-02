@@ -1,84 +1,134 @@
-#Realizado tudo 100% Pela IA
-
 from ursina import *
 
 app = Ursina()
 
-# O objeto que o sol vai "iluminar" na cena
 Entity(model='cube', color=color.orange, scale=2)
 
-# ─── LUZ DIRECIONAL (o "sol") ───────────────────────────────────────────────
-# DirectionalLight simula uma fonte de luz infinitamente distante (como o sol real).
-# Todos os raios chegam paralelos, criando sombras nítidas e consistentes.
+# ─── LUZES ───────────────────────────────────────────────────────────────────
 sun = DirectionalLight()
-sun.look_at(Vec3(1, -1, 1))  # direção inicial: vindo de cima e da lateral
+sun.look_at(Vec3(1, -1, 1))
 
-# ─── LUZ AMBIENTE ────────────────────────────────────────────────────────────
-# A luz ambiente preenche as sombras. Sem ela, a noite não funciona visualmente:
-# o cubo ficaria totalmente iluminado mesmo sem o sol.
-# Usamos a classe AmbientLight do próprio Ursina para isso.
 ambient = AmbientLight()
-ambient.color = color.white  # começa claro (dia)
+ambient.color = color.white
 
-# ─── CÉU (Skybox) ────────────────────────────────────────────────────────────
-# Sky() cria uma esfera gigante ao redor da cena.
-# Mudamos sky.color para trocar a cor do céu.
 sky = Sky()
 
-# ─── CONFIGURAÇÃO DO CICLO ───────────────────────────────────────────────────
-cycle_speed = 20  # graus por segundo. Aumente para um dia mais rápido.
+# ─── ESTADO DO CICLO ─────────────────────────────────────────────────────────
+# Usamos um dicionário para agrupar todas as variáveis de controle em um só lugar.
+# Isso evita variáveis globais soltas e facilita expandir o sistema futuramente.
+cycle = {
+    'auto'       : True,   # True = roda sozinho | False = controle manual
+    'speed'      : 20,     # graus por segundo no modo automático
+    'angle'      : 0.0,    # ângulo atual do sol (0° a 360°)
+    'step_manual': 2.0,    # quantos graus avançar/recuar por tecla no modo manual
+}
 
 
-def update():
-    # ─── PASSO 1: ROTACIONAR O SOL ──────────────────────────────────────────
-    # time.dt = "delta time": tempo (em segundos) desde o último frame.
-    # Multiplicar por time.dt garante que a velocidade seja igual em qualquer
-    # computador, independente dos FPS (frames por segundo).
-    sun.rotate(Vec3(cycle_speed * time.dt, 0, 0))
+# ─── FUNÇÃO AUXILIAR: aplicar o ângulo atual na cena ─────────────────────────
+# Separar a lógica de "calcular cores" da lógica de "avançar o tempo" é uma
+# boa prática chamada Separação de Responsabilidades. Assim, tanto o modo
+# automático quanto o manual chamam a mesma função para atualizar a cena,
+# sem duplicar código.
+def apply_cycle(angle):
+    """Recebe um ângulo (0–360) e atualiza céu, sol e luz ambiente."""
 
-    # ─── PASSO 2: CALCULAR "t" (posição no ciclo) ───────────────────────────
-    # t vai de 0.0 (começo do dia) até 1.0 (fim do ciclo completo).
-    # O % 360 garante que o ângulo sempre fique entre 0 e 360, evitando
-    # números gigantes que poderiam causar imprecisão ao longo do tempo.
-    t = (sun.world_rotation_x % 360) / 360
+    t = (angle % 360) / 360  # normaliza para 0.0–1.0
 
-    # ─── PASSO 3: CALCULAR AS CORES ─────────────────────────────────────────
-    # lerp(a, b, t) = "linear interpolation" (interpolação linear).
-    # Retorna um valor entre 'a' e 'b' conforme 't' vai de 0 a 1.
-    # Exemplo: lerp(azul, preto, 0.5) = um azul bem escuro (metade do caminho).
-
+    # ── Fase 1: Amanhecer (t: 0.00 → 0.25) ──────────────────────────────────
     if t < 0.25:
-        # Amanhecer: laranja → azul céu
-        sky_color = lerp(color.orange, color.cyan, t * 4)
-        sun_intensity = lerp(0.2, 1.0, t * 4)  # sol vai ganhando força
+        f = t * 4                                          # fração local 0→1
+        sky_color    = lerp(color.orange, color.cyan, f)
+        sun_intensity = lerp(0.2, 1.0, f)
 
+    # ── Fase 2: Tarde (t: 0.25 → 0.50) ──────────────────────────────────────
     elif t < 0.5:
-        # Tarde: azul céu → laranja entardecer
-        sky_color = lerp(color.cyan, color.orange, (t - 0.25) * 4)
-        sun_intensity = lerp(1.0, 0.2, (t - 0.25) * 4)
+        f = (t - 0.25) * 4
+        sky_color    = lerp(color.cyan, color.orange, f)
+        sun_intensity = lerp(1.0, 0.2, f)
 
+    # ── Fase 3: Entardecer → Noite (t: 0.50 → 0.75) ─────────────────────────
     elif t < 0.75:
-        # Entardecer → noite
-        sky_color = lerp(color.orange, color.black, (t - 0.5) * 4)
-        sun_intensity = lerp(0.2, 0.0, (t - 0.5) * 4)
+        f = (t - 0.5) * 4
+        sky_color    = lerp(color.orange, color.black, f)
+        sun_intensity = lerp(0.2, 0.0, f)
 
+    # ── Fase 4: Noite funda → Amanhecer (t: 0.75 → 1.00) ────────────────────
     else:
-        # Noite funda → próximo amanhecer
-        sky_color = lerp(color.black, color.orange, (t - 0.75) * 4)
-        sun_intensity = lerp(0.0, 0.2, (t - 0.75) * 4)
+        f = (t - 0.75) * 4
+        sky_color    = lerp(color.black, color.orange, f)
+        sun_intensity = lerp(0.0, 0.2, f)
 
-    # ─── PASSO 4: APLICAR AS CORES NA CENA ──────────────────────────────────
+    # Aplica as cores calculadas na cena
+    sky.color    = sky_color
+    sun.color    = Color(sun_intensity, sun_intensity, sun_intensity * 0.9, 1)
 
-    # Cor do céu: usamos sky.color (e não window.color, que não funciona assim)
-    sky.color = sky_color
-
-    # Intensidade da luz do sol: clamp01 garante que o valor fique entre 0 e 1
-    sun.color = Color(sun_intensity, sun_intensity, sun_intensity * 0.9, 1)
-
-    # Luz ambiente: à noite fica quase zero; de dia fica clara
-    # Sem isso, os objetos ficam igualmente iluminados em qualquer hora do dia!
     ambient_strength = max(0.05, sun_intensity * 0.4)
-    ambient.color = Color(ambient_strength, ambient_strength, ambient_strength, 1)
+    ambient.color    = Color(ambient_strength, ambient_strength, ambient_strength, 1)
 
+    # Reposiciona a luz direcional conforme o ângulo do ciclo.
+    # rotate() acumula rotação a cada frame; aqui preferimos definir a rotação
+    # de forma absoluta para que o manual e o automático se comportem igual.
+    sun.rotation_x = angle
+
+
+# ─── FUNÇÃO AUXILIAR: exibir instruções no terminal ──────────────────────────
+def print_controls():
+    print("\n── Controles do Ciclo Dia/Noite ──────────────────")
+    print("  [SPACE]      Alternar automático / manual")
+    print("  [→] ou [D]   Avançar o sol  (modo manual)")
+    print("  [←] ou [A]   Recuar  o sol  (modo manual)")
+    print("  [+]          Aumentar velocidade (modo automático)")
+    print("  [-]          Diminuir velocidade (modo automático)")
+    print("──────────────────────────────────────────────────")
+    mode = "AUTOMÁTICO" if cycle['auto'] else "MANUAL"
+    print(f"  Modo atual: {mode}  |  Velocidade: {cycle['speed']}°/s\n")
+
+
+# ─── INPUT: alternar modo automático / manual ─────────────────────────────────
+# input() é chamado pelo Ursina sempre que uma tecla é pressionada.
+# 'key' é uma string com o nome da tecla (ex: 'space', 'right arrow', 'a').
+def input(key):
+
+    if key == 'space':
+        # O operador 'not' inverte um booleano: True → False, False → True.
+        cycle['auto'] = not cycle['auto']
+        print_controls()
+
+    # ── Controles manuais de ângulo ───────────────────────────────────────────
+    # Só respondem quando o modo automático está desligado.
+    elif key in ('right arrow', 'd') and not cycle['auto']:
+        cycle['angle'] = (cycle['angle'] + cycle['step_manual']) % 360
+        apply_cycle(cycle['angle'])
+
+    elif key in ('left arrow', 'a') and not cycle['auto']:
+        cycle['angle'] = (cycle['angle'] - cycle['step_manual']) % 360
+        apply_cycle(cycle['angle'])
+
+    # ── Controles de velocidade ───────────────────────────────────────────────
+    # max(..., 1) impede que a velocidade chegue a zero ou fique negativa.
+    elif key == 'o':
+        cycle['speed'] = min(cycle['speed'] + 5, 360)
+        print(f"  Velocidade: {cycle['speed']}°/s")
+
+    elif key == 'p':
+        cycle['speed'] = max(cycle['speed'] - 5, 1)
+        print(f"  Velocidade: {cycle['speed']}°/s")
+
+
+# ─── UPDATE: loop principal (chamado todo frame) ──────────────────────────────
+# No modo automático, avançamos o ângulo com base no tempo decorrido (time.dt).
+# No modo manual, o ângulo só muda quando o jogador pressiona uma tecla,
+# por isso não fazemos nada aqui nesse caso.
+def update():
+    if cycle['auto']:
+        # time.dt garante movimento uniforme independente dos FPS da máquina.
+        cycle['angle'] = (cycle['angle'] + cycle['speed'] * time.dt) % 360
+        apply_cycle(cycle['angle'])
+
+
+# ─── INICIALIZAÇÃO ────────────────────────────────────────────────────────────
+# Aplica o estado inicial antes do primeiro frame e exibe os controles.
+apply_cycle(cycle['angle'])
+print_controls()
 
 app.run()
