@@ -7,64 +7,39 @@ app = Ursina()
 
 # ─── ILUMINAÇÃO ───────────────────────────────────────────────────────────────
 DirectionalLight(y=2, z=-1)
-AmbientLight(color=Color(0.4, 0.4, 0.4, 1))
+AmbientLight(color=Color(0.6, 0.6, 0.6, 1))  # Iluminação mais clara e vibrante
 
-# ─── CHÃO ─────────────────────────────────────────────────────────────────────
-Entity(model='plane', scale=40, color=color.dark_gray)
+# Luz pontual que segue o verme 
+worm_light = PointLight(parent=scene, color=color.azure, position=(0, 10, 0))
+
+# ─── CHÃO COM TEXTURA APRIMORADA ─────────────────────────────────────────────────────────
+Entity(
+    model='plane',
+    scale=40,
+    texture='grass',  # Textura mais detalhada
+    texture_scale=(40, 40),
+    color=color.white,  # Cor mais clara para destacar o verme
+)
 
 # ─── LISTAS DE FONTES DINÂMICAS ───────────────────────────────────────────────
-# Em vez de variáveis fixas (light_source, rain_source), usamos LISTAS.
-#
-# Por quê listas?
-# Com variáveis fixas, só poderíamos ter exatamente 1 luz e 1 chuva.
-# Com listas, podemos ter 0, 1, ou muitas fontes de cada tipo — e adicionar
-# ou remover em tempo de execução sem mudar mais nada no código.
-#
-# Este é um padrão fundamental em programação de jogos chamado
-# "Entity Management": entidades são criadas e destruídas dinamicamente,
-# e o sistema de comportamento itera sobre a lista atual a cada frame.
-light_sources = []   # lista de cubos amarelos (luz → verme foge)
-rain_sources  = []   # lista de cubos ciano   (chuva → verme persegue)
+light_sources = []
+rain_sources = []
 
 # ─── MODO DE EDIÇÃO ───────────────────────────────────────────────────────────
-# O editor_mode controla o que o clique do mouse faz.
-# 'none'  → nenhuma ação de edição ativa (modo observação)
-# 'place_light' → próximo clique coloca uma fonte de luz
-# 'place_rain'  → próximo clique coloca uma fonte de chuva
-# 'delete'      → próximo clique remove o bloco clicado
-#
-# Separar modos em vez de usar múltiplas teclas simultâneas evita
-# conflitos de input e torna o sistema extensível: adicionar um novo
-# modo é só adicionar uma nova string e tratar no input().
-editor = {
-    'mode': 'none',
-}
+editor = {'mode': 'none'}
 
 # ─── PARTÍCULAS DE CHUVA ──────────────────────────────────────────────────────
-# As partículas são visuais — não têm lógica de jogo.
-# Elas são gerenciadas separadamente das rain_sources porque seu número
-# e posição dependem de quantas fontes existem na cena.
 rain_particles = []
 
 def rebuild_rain_particles():
-    """
-    Reconstrói todas as partículas de chuva com base nas rain_sources atuais.
-
-    Esta função é chamada sempre que uma rain_source é criada ou destruída.
-    Destruir e recriar todas as partículas é mais simples do que tentar
-    rastrear quais partículas pertencem a qual fonte — e para 40 partículas,
-    o custo de performance é desprezível.
-    """
-    # Destrói todas as partículas existentes
     for p in rain_particles:
         destroy(p)
     rain_particles.clear()
 
-    # Recria uma nuvem de partículas ao redor de cada rain_source
     for src in rain_sources:
         for _ in range(40):
             rain_particles.append(Entity(
-                model='cube',
+                model='sphere',  # Partículas agora são esferas
                 color=Color(0.5, 0.8, 1, 0.6),
                 scale=0.1,
                 position=(
@@ -74,36 +49,23 @@ def rebuild_rain_particles():
                 )
             ))
 
-
 # ─── CRIAÇÃO INICIAL DAS FONTES ───────────────────────────────────────────────
-# Criamos as fontes iniciais usando as mesmas funções que o editor usará.
-# Isso garante que o estado inicial é idêntico a qualquer estado criado
-# manualmente — sem código duplicado.
-
 def place_light(pos):
-    """
-    Cria uma nova fonte de luz na posição dada e a adiciona à lista.
-
-    O collider='box' é necessário para que o mouse.hovered funcione,
-    permitindo que o modo 'delete' detecte cliques sobre o bloco.
-    """
     src = Entity(
-        model='cube',
-        color=color.yellow,
+        model='sphere',
+        color=color.yellow.tint(-0.2),
         scale=2,
         position=Vec3(pos.x, 1, pos.z),
         collider='box',
     )
     light_sources.append(src)
+    # Efeito visual ao adicionar luz
+    invoke(destroy, Entity(model='sphere', color=color.white, scale=3, position=src.position), delay=0.5)
 
 def place_rain(pos):
-    """
-    Cria uma nova fonte de chuva na posição dada, adiciona à lista
-    e reconstrói as partículas para incluir a nova fonte.
-    """
     src = Entity(
-        model='cube',
-        color=color.cyan,
+        model='sphere',  # Substituímos o cubo por uma esfera
+        color=color.cyan.tint(-0.2),  # Cor mais suave
         scale=2,
         position=Vec3(pos.x, 1, pos.z),
         collider='box',
@@ -111,15 +73,16 @@ def place_rain(pos):
     rain_sources.append(src)
     rebuild_rain_particles()
 
-def delete_source(entity):
-    """
-    Remove uma fonte de luz ou chuva da cena e da lista correspondente.
+# Fundo do cenário
+sky = Entity(
+    model='sphere',
+    scale=500,
+    double_sided=True,
+    texture='sky_sunset',  # Textura de céu
+    color=color.white.tint(-0.2),
+)
 
-    destroy() remove a entidade do Ursina (libera memória e para de renderizar).
-    list.remove() remove a referência Python à entidade.
-    Se não fizermos os dois, ou a entidade continua visível (sem destroy),
-    ou o Python tenta acessar um objeto destruído (sem remove) → crash.
-    """
+def delete_source(entity):
     if entity in light_sources:
         light_sources.remove(entity)
         destroy(entity)
@@ -128,17 +91,10 @@ def delete_source(entity):
         destroy(entity)
         rebuild_rain_particles()
 
-# Fontes iniciais
 place_light(Vec3(10, 1, 10))
 place_rain(Vec3(-10, 1, -10))
 
 # ─── PLANO INVISÍVEL DE POSICIONAMENTO ────────────────────────────────────────
-# Quando o usuário clica para colocar um bloco, precisamos saber ONDE no chão
-# o mouse está apontando. O Ursina faz isso com raycast — um raio invisível
-# disparado da câmera na direção do mouse.
-#
-# Para o raycast funcionar, o chão precisa ter um collider.
-# Criamos um plano invisível só para isso (o plano visual não tem collider).
 ground_collider = Entity(
     model='plane',
     scale=40,
@@ -147,19 +103,32 @@ ground_collider = Entity(
     y=0,
 )
 
-# ─── VERME ────────────────────────────────────────────────────────────────────
-NUM_SEGMENTS   = 8
-SEGMENT_SIZE   = 1.8
-SEGMENT_GAP    = 2.0
-SPEED          = 4.0
-ARRIVAL_RADIUS = 5.0
+# ─── VERME COM DESIGN SOFISTICADO ─────────────────────────────────────────────
+NUM_SEGMENTS = 12  # Aumentar o número de segmentos
+SEGMENT_SIZE = 2.5  # Aumentar o tamanho dos segmentos
+SEGMENT_GAP = 2.5  # Ajustar o espaçamento entre os segmentos
+SPEED = 6.0  # Tornar o movimento mais rápido
+ARRIVAL_RADIUS = 7.0  # Ajustar o raio de chegada
 
-history = [Vec3(0, SEGMENT_SIZE / 2, 0)] * (NUM_SEGMENTS + 1) * 4
+# Função para interpolar entre duas cores
+def interpolate_color(color1, color2, t):
+    t = max(0.0, min(1.0, t))  # Garantir que t esteja entre 0 e 1
+    r = color1.r + (color2.r - color1.r) * t
+    g = color1.g + (color2.g - color1.g) * t
+    b = color1.b + (color2.b - color1.b) * t
+    a = color1.a + (color2.a - color1.a) * t
+    return Color(r, g, b, a)
 
+# Gradiente de cores mais dramático (do preto ao azul brilhante)
+segment_colors = [
+    interpolate_color(color.black, color.cyan.tint(0.5), i / NUM_SEGMENTS) for i in range(NUM_SEGMENTS)
+]
+
+# Remova as texturas e use apenas cores sólidas
 head = Entity(
     model='sphere',
-    color=color.lime,
-    scale=SEGMENT_SIZE * 1.2,
+    color=color.cyan.tint(-0.2),  # Cor sólida para teste
+    scale=SEGMENT_SIZE * 1.1,
     position=(0, SEGMENT_SIZE / 2, 0),
     collider='sphere',
 )
@@ -167,23 +136,40 @@ head = Entity(
 segments = [
     Entity(
         model='sphere',
-        color=color.lime.tint(i * -0.06),
-        scale=SEGMENT_SIZE * (1.0 - i * 0.04),
+        color=segment_colors[i],  # Gradiente de cores
+        scale=SEGMENT_SIZE * (1.0 - i * 0.05),
         position=head.position - Vec3(0, 0, i * SEGMENT_GAP),
     )
-    for i in range(1, NUM_SEGMENTS + 1)
+    for i in range(NUM_SEGMENTS)
 ]
+# Luz suave que segue o verme
+worm_light = PointLight(
+    parent=head,
+    color=color.cyan,  # Luz azul brilhante
+    position=(0, 5, 0),
+    intensity=1.5,  # Aumentar a intensidade da luz
+)
+
+# ─── ANIMAÇÃO DO VERME ────────────────────────────────────────────────────────
+# ─── ANIMAÇÃO DO VERME ────────────────────────────────────────────────────────
+def animate_worm():
+    for i, seg in enumerate(segments):
+        # Animação de ondulação nos segmentos
+        seg.scale = SEGMENT_SIZE * (1.0 - i * 0.05) * (1 + math.sin(time.time() * 5 + i) * 0.1)
+        seg.color = segment_colors[i].tint(math.sin(time.time() * 3 + i) * 0.2)
+        seg.rotation_y += math.sin(time.time() * 2 + i) * 5  # Leve rotação
 
 # ─── CÉREBRO ──────────────────────────────────────────────────────────────────
 brain = WormBrain()
 
 # ─── CÂMERA ───────────────────────────────────────────────────────────────────
+# Ajuste a posição inicial da câmera
 cam_pivot = Entity()
 cam_pivot.y = 10
 
-camera.parent   = cam_pivot
-camera.position = (0, 0, -50)
-camera.rotation = (10, 0, 0)
+camera.parent = cam_pivot
+camera.position = (0, 20, -50)  # Ajuste a posição para visualizar o verme
+camera.rotation = (20, 0, 0)
 
 cam = {
     'rot_speed' : 40.0,
@@ -204,39 +190,107 @@ state = {
 }
 
 # ─── FUNÇÕES DO VERME ─────────────────────────────────────────────────────────
+# Histórico de posições da cabeça do verme
+history = [Vec3(0, SEGMENT_SIZE / 2, 0)] * (NUM_SEGMENTS + 1) * 4
+MAX_HISTORY_LENGTH = (NUM_SEGMENTS + 1) * 10  # Definir um tamanho máximo global
 
+# ─── UPDATE ───────────────────────────────────────────────────────────────────
+# Função para criar partículas ao redor do verme
+def spawn_energy_particles():
+    for _ in range(20):  # Criar 20 partículas
+        Entity(
+            model='sphere',
+            color=color.cyan.tint(0.5),
+            scale=0.2,
+            position=head.position + Vec3(random.uniform(-1, 1), random.uniform(-1, 1), random.uniform(-1, 1)),
+            add_to_scene_entities=False,
+            lifetime=0.5,  # Partículas desaparecem após 0.5 segundos
+        )
+
+# Adicionar partículas no update
+def update():
+    spawn_energy_particles()
+    update_camera()
+    update_rain_particles()
+    update_segments()
+    update_rewards()
+
+def update_camera():
+    cam_pivot.position = lerp(cam_pivot.position, head.position, 0.1)
+    worm_light.position = head.position + Vec3(0, 5, 0)
+
+def update_rain_particles():
+    for p in rain_particles:
+        p.y -= time.dt * 3
+        if p.y < 0:
+            if rain_sources:
+                src = min(
+                    rain_sources,
+                    key=lambda r: (Vec3(p.x, 0, p.z) - Vec3(r.x, 0, r.z)).length()
+                )
+                p.x = src.x + random.uniform(-3, 3)
+                p.z = src.z + random.uniform(-3, 3)
+            p.y = 8
+
+def update_segments():
+    history.insert(0, Vec3(head.position))
+    while len(history) > MAX_HISTORY_LENGTH:
+        history.pop()
+
+    for i, seg in enumerate(segments):
+        idx = min(int((i + 1) * SEGMENT_GAP * (SPEED / 4)), len(history) - 1)
+        seg.position = history[idx]
+
+# Função para criar partículas de feedback
+def spawn_feedback_particles(reward):
+    color_feedback = color.green if reward > 0 else color.red
+    for _ in range(10):  # Criar 10 partículas
+        Entity(
+            model='sphere',
+            color=color_feedback,
+            scale=0.1,
+            position=head.position + Vec3(random.uniform(-0.5, 0.5), random.uniform(-0.5, 0.5), random.uniform(-0.5, 0.5)),
+            add_to_scene_entities=False,
+            lifetime=0.5,  # Partículas desaparecem após 0.5 segundos
+        )
+
+def update_rewards():
+    state['reward_timer'] += time.dt
+    if state['reward_timer'] >= state['reward_interval']:
+        state['reward_timer'] = 0.0
+        reward = calculate_reward()
+        brain.reinforce(reward=reward)
+        state['total_reward'] += reward
+
+        # Adicionar feedback visual
+        spawn_feedback_particles(reward)
 def reset():
     """Reinicia o verme e o cérebro sem fechar o programa."""
+    if not history:
+        print("Erro: 'history' não está inicializado.")
+        return
+
     head.position = Vec3(0, SEGMENT_SIZE / 2, 0)
     for i, seg in enumerate(segments):
         seg.position = head.position - Vec3(0, 0, (i + 1) * SEGMENT_GAP)
     history.clear()
-    for _ in range((NUM_SEGMENTS + 1) * 4):
+    for _ in range(MAX_HISTORY_LENGTH):
         history.append(Vec3(head.position))
-    state['direction']    = Vec3(0, 0, 1)
-    state['reward_timer'] = 0.0
-    state['total_reward'] = 0.0
-    state['rain_pulse']   = 0.0
-    state['pulse_timer']  = 0.0
+    state.update({
+        'direction': Vec3(0, 0, 1),
+        'reward_timer': 0.0,
+        'total_reward': 0.0,
+        'rain_pulse': 0.0,
+        'pulse_timer': 0.0,
+    })
     brain.__init__()
     print("\n── Reiniciado ──────────────────────────────────\n")
 
 
 def get_sensor_inputs():
-    """
-    Calcula os dois sinais sensoriais do verme: luz e tato.
-
-    O verme não "vê" a cena como nós vemos — ele só recebe dois números.
-    Esta função é a ponte entre o mundo 3D rico do Ursina e o mundo
-    simplificado de 2 dimensões que o cérebro do verme consegue processar.
-
-    Quando há múltiplas fontes, usamos a fonte MAIS PRÓXIMA de cada tipo.
-    Biologicamente, isso simula um receptor que responde ao estímulo
-    mais intenso — análogo a como fotorreceptores reais funcionam.
-    """
     max_dist = 30.0
 
-    # ── Fotorrecepcao: fonte de luz mais próxima ──────────────────────────────
+    # Fotorrecepção: fonte de luz mais próxima
     if light_sources:
         dist_light = min(
             (head.position - ls.position).length()
@@ -244,17 +298,16 @@ def get_sensor_inputs():
         )
         light_input = max(0.0, 1.0 - (dist_light / max_dist))
     else:
-        # Sem fontes de luz → sem estimulo luminoso
-        light_input = 0.0
+        light_input = 0.0  # Sem fontes de luz → sem estímulo luminoso
 
-    # ── Tato/vibracao: fonte de chuva mais próxima ────────────────────────────
+    # Tato/vibração: fonte de chuva mais próxima
     if rain_sources:
         dist_rain = min(
             (head.position - rs.position).length()
             for rs in rain_sources
         )
         rain_proximity = max(0.0, 1.0 - (dist_rain / max_dist))
-        touch_input    = min(1.0, rain_proximity + state['rain_pulse'] * 0.3)
+        touch_input = min(1.0, rain_proximity + state['rain_pulse'] * 0.3)
     else:
         touch_input = 0.0
 
@@ -262,22 +315,8 @@ def get_sensor_inputs():
 
 
 def calculate_reward():
-    """
-    Define numericamente o que é "bom" e o que é "ruim" para o verme.
-
-    Esta é a função mais importante do aprendizado por reforço.
-    A rede neural não sabe intrinsecamente o que deve fazer —
-    ela só sabe que deve maximizar a recompensa ao longo do tempo.
-    Logo, a qualidade do aprendizado depende diretamente da qualidade
-    desta função. Uma recompensa mal definida gera comportamento errado,
-    mesmo que a rede seja perfeita.
-
-    Com múltiplas fontes, recompensamos com base na fonte mais favorável:
-    - Luz mais distante (melhor caso de fuga)
-    - Chuva mais próxima (melhor caso de aproximação)
-    """
     max_dist = 30.0
-    reward   = 0.0
+    reward = 0.0
 
     # Penalidade pela luz mais próxima
     if light_sources:
@@ -286,9 +325,9 @@ def calculate_reward():
             for ls in light_sources
         )
         norm_light = min(dist_light / max_dist, 1.0)
-        reward    += norm_light  # longe da luz = recompensa positiva
+        reward += norm_light  # Longe da luz = recompensa positiva
         if dist_light < ARRIVAL_RADIUS:
-            reward -= 0.5        # penalidade extra por estar no perigo
+            reward -= 0.5  # Penalidade extra por estar no perigo
 
     # Recompensa pela chuva mais próxima
     if rain_sources:
@@ -296,11 +335,12 @@ def calculate_reward():
             (head.position - rs.position).length()
             for rs in rain_sources
         )
-        norm_rain  = min(dist_rain / max_dist, 1.0)
-        reward    -= norm_rain   # longe da chuva = recompensa negativa
+        norm_rain = min(dist_rain / max_dist, 1.0)
+        reward -= norm_rain  # Longe da chuva = recompensa negativa
         if dist_rain < ARRIVAL_RADIUS:
-            reward += 0.5        # bônus extra por estar no alvo
+            reward += 0.5  # Bônus extra por estar no alvo
 
+    # Garantir que a recompensa esteja no intervalo [-1.0, 1.0]
     return max(-1.0, min(1.0, reward))
 
 
@@ -365,6 +405,10 @@ def get_target_direction():
 
 # ─── UPDATE ───────────────────────────────────────────────────────────────────
 def update():
+    # Atualizar posição da câmera para seguir o verme
+    cam_pivot.position = lerp(cam_pivot.position, head.position, 0.1)
+    worm_light.position = head.position + Vec3(0, 5, 0)
+    animate_worm()
 
     # ── Câmera: órbita ────────────────────────────────────────────────────────
     if mouse.right:
