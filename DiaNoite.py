@@ -73,13 +73,13 @@ def apply_cycle(angle):
 
 # ─── FUNÇÃO AUXILIAR: exibir instruções no terminal ──────────────────────────
 def print_controls():
-    print("\n── Controles do Ciclo Dia/Noite ──────────────────")
+    print("\n-- Controles do Ciclo Dia/Noite ----------------------")
     print("  [SPACE]      Alternar automático / manual")
-    print("  [→] ou [D]   Avançar o sol  (modo manual)")
-    print("  [←] ou [A]   Recuar  o sol  (modo manual)")
-    print("  [+]          Aumentar velocidade (modo automático)")
-    print("  [-]          Diminuir velocidade (modo automático)")
-    print("──────────────────────────────────────────────────")
+    print("  [->] ou [D]   Avançar o sol  (modo manual)")
+    print("  [<-] ou [A]   Recuar  o sol  (modo manual)")
+    print("  [O]          Aumentar velocidade (modo automático)")
+    print("  [P]          Diminuir velocidade (modo automático)")
+    print("----------------------------------------------------")
     mode = "AUTOMÁTICO" if cycle['auto'] else "MANUAL"
     print(f"  Modo atual: {mode}  |  Velocidade: {cycle['speed']}°/s\n")
 
