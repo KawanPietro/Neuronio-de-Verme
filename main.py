@@ -21,9 +21,12 @@ app = Ursina()
 #   --set k=v       → sobrescreve um valor do CONFIG (tabela de experimentos).
 EVAL_MODE = '--eval' in sys.argv
 EVAL_EPISODES = None
+NUM_SEEDS = 1
 for _arg in sys.argv:
     if _arg.startswith('--episodes='):
         EVAL_EPISODES = int(_arg.split('=')[1])
+    elif _arg.startswith('--seeds='):
+        NUM_SEEDS = int(_arg.split('=')[1])
     elif _arg.startswith('--set='):
         key, value = _arg[len('--set='):].split('=', 1)
         try:

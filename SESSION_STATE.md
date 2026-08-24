@@ -2,8 +2,9 @@
 
 ## Status atual
 - Fases 0–6 completas e validadas
-- **Fase 7 em andamento** (engenharia de recompensa): config.py e perception.py atualizados, mas treino/avaliação ainda NÃO concluídos com os novos hiperparâmetros
-- Último commit pendente: todas as mudanças da Fase 7 ainda não foram commitadas
+- **Fase 7 concluída (resultados parciais)**: engenharia de recompensa implementada, multi-seed (5 sementes) rodado
+- **DoD NÃO atingido** (80% chegada sem perigo): melhor resultado = 40% (seed 5)
+- Último commit: `0a181ba` (push pendente — sem autenticação GitHub)
 
 ## O que foi feito (Fases 0–6)
 
@@ -64,13 +65,19 @@
 **debug_sensores.py:**
 - C3 atualizado: idle_cost desativado, teste espera `r >= 0`
 
-### O que falta fazer (próximos passos)
+### O que foi feito (Fase 7 — concluída)
+- config.py: rewards 5x, entropy 5x, lr 5x, proximity 1/dist, action_repeat_penalty
+- perception.py: potencial de proximidade (1/dist)
+- main.py: action_history tracking + repeat penalty
+- Multi-seed training (5 sementes, 100 eps cada)
+- Avaliação: seed 5 melhor = 40% (8/20 stage C seguro)
+- Avaliação longa: 100 eps = 20% (14/70 stage C seguro)
+- Política colapsa para UMA ação (frente/esquerda/direita) — problema estrutural do REINFORCE
 
-1. **Rodar treino**: `python -u main.py --episodes=100` (salva pesos.json)
-2. **Rodar avaliação**: `python -u main.py --eval --episodes=50` (carrega pesos.json)
-3. **Analisar CSV**: verificar se % chegada chuva + sem perigo ≥ 80% (DoD)
-4. **Se DoD não atingido**: ajustar `action_repeat_penalty` ou `proximity_rain_bonus`
-5. **Atualizar docs**: EXPERIMENTOS.md (linha 2), PLANO (Fase 7 ✅), README
+### O que falta fazer (Fase 8 — se necessário)
+1. **Trocar algoritmo**: PPO, A2C com value function, ou DQN com ε-greedy
+2. Ou: **treinar 500+ episódios** com multi-seed (pode convergir mais devagar)
+3. Ou: **aceitar resultado atual** e documentar limitações no README
 
 ### DoD (Definition of Done) do projeto
 1. `teacher_influence = 0` permanente → ✅ (Estágio C + `--eval`)
