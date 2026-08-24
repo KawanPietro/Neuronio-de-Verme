@@ -21,12 +21,13 @@
 | 4 | Currículo de autonomia | Do professor ao piloto automático; annealing do professor | M | ✅ concluída |
 | 5 | Métricas e memória | Medir, salvar e visualizar o aprendizado (cultura de dados) | S | ✅ concluída |
 | 6 | Robustez e calibração | Tuning, exploração, correção de casos-limite | S | ✅ concluída |
+| 7 | Engenharia de recompensa | Sinais fortes, anti-colapso, multi-seed | M | ✅ concluída (parcial) |
 
 > Estimativa de esforço relativa: S = pequena (1–2 sessões), M = média (2–4), L = grande (4+).
 
 **Critério de conclusão (Definition of Done) do projeto:**
 1. `teacher_influence = 0` de forma permanente. ✅ (Estágio C + tecla `A` + `--eval`)
-2. Na avaliação (configs fixos e "nunca vistos"), o verme chega à chuva e **não** entra na zona de perigo em ≥ 80% dos episódios, ao longo de várias sementes aleatórias. ⏳ **validação final**: `python main.py --eval --episodes=50` após um treino completo (ver `EXPERIMENTOS.md`).
+2. Na avaliação (configs fixos e "nunca vistos"), o verme chega à chuva e **não** entra na zona de perigo em ≥ 80% dos episódios, ao longo de várias sementes aleatórias. ❌ **não atingido** (melhor: 40% com seed 5). Causa: REINFORCE puro colapsa para 1 ação. Solução: PPO/A2C/DQN ou treino 500+ eps.
 3. O jogo roda em tempo real e exibe métricas de aprendizado sem travar. ✅ (HUD + grade de setas + CSV)
 
 ---
