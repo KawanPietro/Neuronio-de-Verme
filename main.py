@@ -451,10 +451,11 @@ def finish_episode():
         stats = episode_stats(brain, state['episode'])
     else:
         # B: REINFORCE + λ·CE ; C: REINFORCE puro (λ = 0)
-        # Fase 8: A2C — usa critic para GAE advantage
+        # Fase 9: PPO — GAE advantage + clipped surrogate + critic
         stats = brain.update_episode(state['episode'], imitation_weight=lam,
                                      critic=critic, value_coef=CONFIG['value_coef'],
-                                     gae_lambda=CONFIG['gae_lambda'])
+                                     gae_lambda=CONFIG['gae_lambda'],
+                                     ppo_clip=CONFIG['ppo_clip'])
 
     if not EVAL_MODE:
         brain.learning_rate *= CONFIG['lr_decay']

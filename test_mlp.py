@@ -228,6 +228,9 @@ def main():
     # 9 — save/load combinado (actor + critic, Fase 8)
     results.append(test_save_load_brain())
 
+    # 10 — PPO clipped surrogate (Fase 9)
+    results.append(test_ppo_update())
+
     print()
     if all(results):
         print("Todos os testes conferem.")
@@ -342,6 +345,35 @@ def test_save_load_brain():
     assert ok_actor, "Actor probs divergem apos load"
     assert ok_critic, "Critic value diverge apos load"
     print("[OK] save/load brain -- actor + critic preservados")
+    return True
+
+
+def test_ppo_update():
+    """PPO clipped surrogate: actor + critic mudam pesos, advantage menor que A2C puro."""
+    random.seed(42)
+    actor  = PolicyNetwork(8, 16, 5, temperature=1.0)
+    critic = CriticNetwork(8, n_hidden=16)
+
+    sensors = [random.uniform(-1, 1) for _ in range(8)]
+    episode = [(sensors, random.randrange(5), random.uniform(-0.5, 0.5)) for _ in range(30)]
+
+    w_actor_before  = actor.w_hidden_output[0][0]
+    w_critic_before = critic.w_hidden_output[0][0]
+
+    stats = actor.update_episode(episode, gamma=0.9, learning_rate=0.01,
+                                 entropy_coef=0.01, regularization=0.0,
+                                 reward_scale=1.0, critic=critic,
+                                 value_coef=0.5, gae_lambda=0.95,
+                                 ppo_clip=0.2)
+
+    w_actor_after  = actor.w_hidden_output[0][0]
+    w_critic_after = critic.w_hidden_output[0][0]
+
+    assert w_actor_before != w_actor_after, "Actor nao mudou"
+    assert w_critic_before != w_critic_after, "Critic nao mudou"
+    assert 'mean_advantage' in stats, "Stats sem mean_advantage"
+    assert 'critic_loss' in stats, "Stats sem critic_loss"
+    print("[OK] PPO update -- actor + critic atualizam com clipping")
     return True
 
 

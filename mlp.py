@@ -365,12 +365,14 @@ class PolicyNetwork(MLP):
         self.last_probs = None
         self.last_logits = None
         self.last_temp_scale = 1.0
+        self.old_probs = None  # Fase 9: π_old(a|s) para PPO clipping
 
     def reset(self):
         super().reset()
         self.last_probs = None
         self.last_logits = None
         self.last_temp_scale = 1.0
+        self.old_probs = None
 
     # ── Distribuição e amostragem ────────────────────────────────────────────
 
@@ -413,6 +415,44 @@ class PolicyNetwork(MLP):
         H = entropy(self.last_probs)
         return [self.last_temp_scale * p * (-math.log(p + 1e-12) - H)
                 for p in self.last_probs]
+
+    # ── PPO: gradiente clipped (Fase 9) ─────────────────────────────────────
+    #
+    # PPO clipped surrogate:  L = min(r·A, clip(r, 1−ε, 1+ε)·A)
+    # onde r = π_new(a|s) / π_old(a|s)  (razão de probabilidades).
+    #
+    # O gradiente em relação aos logits:
+    #   dL/dz_k = A · [δ_{ak} − π_k] · min(1, r/A)   se A > 0
+    #           = A · [δ_{ak} − π_k] · max(1, r/A)   se A < 0
+    #
+    # Isso equivale a "limitar quanto o gradiente pode mudar a política" —
+    # previne update grande demais que destrói o que foi aprendido.
+
+    def ppo_grad_log_prob_z(self, action, old_probs_a, advantage, clip_eps):
+        """
+        Gradiente do PPO clipped surrogate em relação aos logits.
+
+        action:     ação tomada
+        old_probs_a: π_old(a|s) — probabilidade da ação na política antiga
+        advantage:  A_t (GAE)
+        clip_eps:   ε do clipping (ex: 0.2)
+        Retorna: lista de gradientes em relação aos logits (5 valores).
+        """
+        pi_a = self.last_probs[action]
+        ratio = pi_a / (old_probs_a + 1e-12)
+
+        # Clipping da razão
+        if advantage > 0:
+            clipped_ratio = min(ratio, 1.0 + clip_eps)
+        else:
+            clipped_ratio = max(ratio, 1.0 - clip_eps)
+
+        # Gradiente: A · (δ_{ak} − π_k) · clipped_ratio / T
+        # (derivada de log π em relação ao logits, composta com o clipping)
+        return [self.last_temp_scale * clipped_ratio * advantage * (
+                    (1.0 if k == action else 0.0) - p
+                )
+                for k, p in enumerate(self.last_probs)]
 
     # ── Atualização (ponte provisória para a Fase 3) ─────────────────────────
     #
@@ -470,12 +510,13 @@ class PolicyNetwork(MLP):
     def update_episode(self, episode, gamma=None, learning_rate=None,
                        entropy_coef=None, regularization=None, reward_scale=None,
                        imitation_weight=0.0, critic=None, value_coef=0.5,
-                       gae_lambda=0.95):
+                       gae_lambda=0.95, ppo_clip=None):
         """
-        Update episódico: REINFORCE (Fase 3) ou A2C (Fase 8).
+        Update episódico: REINFORCE (Fase 3), A2C (Fase 8) ou PPO (Fase 9).
 
-        Se critic for fornecido, usa GAE advantage + critic loss (A2C).
-        Caso contrário, usa REINFORCE com baseline (G_t − média).
+        Se ppo_clip for fornecido: usa PPO clipped surrogate (Fase 9).
+        Se critic for fornecido (sem ppo_clip): usa A2C com GAE (Fase 8).
+        Caso contrário: usa REINFORCE com baseline (Fase 3).
         """
         if gamma is None:
             gamma = CONFIG['gamma']
@@ -490,7 +531,7 @@ class PolicyNetwork(MLP):
 
         scaled_rewards = [r * reward_scale for _, _, r, *_ in episode]
 
-        # ── Modo A2C: GAE advantage + critic loss ────────────────────────────
+        # ── Modo A2C/PPO: GAE advantage + critic loss ─────────────────────────
         if critic is not None:
             # Coleta V(s_t) para cada passo
             values = []
@@ -502,6 +543,14 @@ class PolicyNetwork(MLP):
 
             # Retornos para o critic loss: G_t = A_t + V(s_t)
             returns = [a + v for a, v in zip(advantages, values)]
+
+            # PPO (Fase 9): coleta π_old(a|s) antes do update
+            old_probs_list = None
+            if ppo_clip is not None:
+                old_probs_list = []
+                for sensors, action, *_ in episode:
+                    self.probabilities(sensors)
+                    old_probs_list.append(self.last_probs[action])
 
             # Acumula gradientes do actor E do critic
             self.grad_acc = None
@@ -519,10 +568,23 @@ class PolicyNetwork(MLP):
                 total_entropy += entropy(self.last_probs)
                 action_counts[action] += 1
 
-                grad_z = [
-                    advantage * gl + entropy_coef * ge
-                    for gl, ge in zip(self.grad_log_prob_z(action), self.grad_entropy_z())
-                ]
+                # PPO (Fase 9): gradiente clipped em vez de advantage puro
+                if ppo_clip is not None and old_probs_list is not None:
+                    grad_z = [
+                        g + entropy_coef * ge
+                        for g, ge in zip(
+                            self.ppo_grad_log_prob_z(action, old_probs_list[t],
+                                                     advantage, ppo_clip),
+                            self.grad_entropy_z()
+                        )
+                    ]
+                else:
+                    # A2C (Fase 8): advantage puro
+                    grad_z = [
+                        advantage * gl + entropy_coef * ge
+                        for gl, ge in zip(self.grad_log_prob_z(action),
+                                          self.grad_entropy_z())
+                    ]
                 if imitation_weight > 0 and teacher_action is not None:
                     grad_z = [
                         gz + imitation_weight * gt

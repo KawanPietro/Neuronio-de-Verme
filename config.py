@@ -62,6 +62,9 @@ CONFIG = {
     'value_coef'       : 0.5,   # Peso do critic loss no update combinado
     'gae_lambda'       : 0.95,  # λ do GAE: trade-off viés/variancia do advantage
 
+    # ── PPO (Fase 9): Proximal Policy Optimization ───────────────────────────
+    'ppo_clip'         : 0.2,   # ε do clipping: limita razão π_new/π_old em [1−ε, 1+ε]
+
     # ── Autonomia (curriculum learning) ──────────────────────────────────────
     # (a autonomia por recompensa da Fase 1 foi substituída pelos estágios da
     #  Fase 4; o valor fica como referência do ganho de autonomia esperado)
