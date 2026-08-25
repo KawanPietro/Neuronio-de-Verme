@@ -278,12 +278,80 @@ class MLP:
         self.grad_acc = None
 
 
-# ─── Política estocástica (cabeçote softmax) ─────────────────────────────────
+# ─── Funções de save/load combinado (actor + critic, Fase 8) ─────────────────
+
+def save_brain(path, actor, critic=None):
+    """Salva actor (e opcionalmente critic) num JSON."""
+    data = {'actor': actor.params()}
+    if critic is not None:
+        data['critic'] = critic.params()
+    with open(path, 'w') as f:
+        json.dump(data, f)
+
+
+def load_brain(path, actor, critic=None):
+    """Carrega actor (e opcionalmente critic) de um JSON."""
+    with open(path) as f:
+        data = json.load(f)
+    if 'actor' in data:
+        actor.set_params(data['actor'])
+    else:
+        actor.set_params(data)  # compatibilidade com pesos antigos (só actor)
+    if critic is not None and 'critic' in data:
+        critic.set_params(data['critic'])
 #
 # π(a|s) = softmax(W2·h + b2)  →  distribuição de probabilidade sobre ações.
 # A ação é AMOSTRADA (não é o argmax) — é isso que permite aprender por tentativa.
 
 ACTIONS = ['esquerda', 'frente_esquerda', 'frente', 'frente_direita', 'direita']
+
+
+# ─── Crítico (Fase 8 — A2C) ─────────────────────────────────────────────────
+#
+# V(s) estima o valor esperado do estado: "quanto recompensa total espero daqui?"
+# Usado para calcular advantage via GAE:  A_t = δ_t + γλ·δ_{t+1} + ...
+# onde δ_t = r_t + γV(s_{t+1}) − V(s_t)  (erro TD).
+#
+# Arquitetura: idêntica ao actor (8→16→1), mas com saída identidade (escalar).
+
+class CriticNetwork(MLP):
+
+    def __init__(self, n_inputs, n_hidden=16):
+        super().__init__(n_inputs, n_hidden, 1, 'tanh', 'identity')
+        self.learning_rate = CONFIG['learning_rate']
+
+    def value(self, inputs):
+        """V(s) — retorna o valor escalar do estado."""
+        return self.forward(inputs)[0]
+
+
+# ─── Cálculo de GAE (Generalized Advantage Estimation) ──────────────────────
+#
+# Advantage = "o que aconteceu vs. o que eu esperava".
+# GAE suaviza entre TD(0) (baixa variância, alto viés) e REINFORCE (alta variância,
+# baixo viés):  A_t = Σ_{l=0} (γλ)^l · δ_{t+l}
+# onde δ_t = r_t + γ·V(s_{t+1}) − V(s_t).
+#
+# λ (gae_lambda) controla o trade-off: λ=0 → puro TD, λ=1 → REINFORCE.
+
+def compute_gae(rewards, values, gamma, gae_lambda):
+    """
+    Calcula GAE advantage para um episódio.
+
+    rewards: lista de recompensas [r_0, r_1, ..., r_{T-1}]
+    values:  lista de valores [V(s_0), V(s_1), ..., V(s_{T-1})]
+             (o último V(s_T) é 0 — estado terminal)
+    Retorna: lista de advantages [A_0, A_1, ..., A_{T-1}]
+    """
+    T = len(rewards)
+    advantages = [0.0] * T
+    gae = 0.0
+    for t in range(T - 1, -1, -1):
+        next_value = values[t + 1] if t + 1 < T else 0.0
+        delta = rewards[t] + gamma * next_value - values[t]
+        gae = delta + gamma * gae_lambda * gae
+        advantages[t] = gae
+    return advantages
 
 
 class PolicyNetwork(MLP):
@@ -388,30 +456,26 @@ class PolicyNetwork(MLP):
         self.backward_from_output_grad(grad_z)
         self.apply_gradients(learning_rate, regularization)
 
-    # ── REINFORCE episódico com baseline (Fase 3) + imitação híbrida (Fase 4) ─
+    # ── REINFORCE episódico (Fase 3) + A2C (Fase 8) ──────────────────────────
     #
-    # Loop de treino (Williams 1992):
-    #   1. coletar H passos  →  (estado, ação, recompensa [, ação_professor])
-    #   2. retornos descontados  G_t = Σ γ^k · r_{t+k}
-    #   3. baseline            b  = média dos retornos do episódio
-    #   4. gradiente           ∇θ J ≈ Σ (G_t − b) · ∇θ log π(a_t|s_t) + β·∇H(π)
-    #   5. atualizar pesos     θ ← θ + α·∇θ J − α·λ·θ
+    # Modo REINFORCE (critic=None):
+    #   advantage = G_t − baseline   (baseline = média dos retornos)
     #
-    # Estágio B (Fase 4): soma o termo de imitação com peso λ (decai até 0):
-    #   ∇ += λ · ∇CE(π, a_professor) = −λ · ∇logπ(a_professor|s)
+    # Modo A2C (critic != None):
+    #   advantage = GAE(δ_t, γ, λ)   (δ_t = r_t + γV(s_{t+1}) − V(s_t))
+    #   + critic_loss = MSE(V(s_t), G_t)
     #
-    # O advantage (G_t − b) é a lição central: "compare com a média do episódio,
-    # não com um número absoluto" — reduz a variância do gradiente.
+    # Em ambos os modos:  ∇ = advantage · ∇logπ(a|s) + β · ∇H(π)
 
     def update_episode(self, episode, gamma=None, learning_rate=None,
                        entropy_coef=None, regularization=None, reward_scale=None,
-                       imitation_weight=0.0):
+                       imitation_weight=0.0, critic=None, value_coef=0.5,
+                       gae_lambda=0.95):
         """
-        REINFORCE com baseline sobre um episódio completo.
+        Update episódico: REINFORCE (Fase 3) ou A2C (Fase 8).
 
-        episode = lista de (sensors, action, reward) — opcionalmente com um
-        4º elemento `action_professor` (usado no Estágio B quando imitation_weight > 0).
-        Retorna um dict com estatísticas: recompensa média/entropia/uso de ações.
+        Se critic for fornecido, usa GAE advantage + critic loss (A2C).
+        Caso contrário, usa REINFORCE com baseline (G_t − média).
         """
         if gamma is None:
             gamma = CONFIG['gamma']
@@ -424,13 +488,75 @@ class PolicyNetwork(MLP):
         if reward_scale is None:
             reward_scale = CONFIG['reward_scale']
 
-        # Passo 2 — retornos descontados (com reward scaling opcional)
-        returns = compute_returns([r * reward_scale for _, _, r, *_ in episode], gamma)
+        scaled_rewards = [r * reward_scale for _, _, r, *_ in episode]
 
-        # Passo 3 — baseline: média dos retornos do episódio
+        # ── Modo A2C: GAE advantage + critic loss ────────────────────────────
+        if critic is not None:
+            # Coleta V(s_t) para cada passo
+            values = []
+            for sensors, *_ in episode:
+                values.append(critic.value(sensors))
+
+            # GAE advantage
+            advantages = compute_gae(scaled_rewards, values, gamma, gae_lambda)
+
+            # Retornos para o critic loss: G_t = A_t + V(s_t)
+            returns = [a + v for a, v in zip(advantages, values)]
+
+            # Acumula gradientes do actor E do critic
+            self.grad_acc = None
+            critic.grad_acc = None
+            total_entropy = 0.0
+            total_critic_loss = 0.0
+            action_counts = [0] * self.n_actions
+
+            for t, item in enumerate(episode):
+                sensors, action, _, teacher_action = (item + (None, None))[:4]
+                advantage = advantages[t]
+
+                # ── Actor: ∇logπ · advantage + β·∇H ─────────────────────────
+                self.probabilities(sensors)
+                total_entropy += entropy(self.last_probs)
+                action_counts[action] += 1
+
+                grad_z = [
+                    advantage * gl + entropy_coef * ge
+                    for gl, ge in zip(self.grad_log_prob_z(action), self.grad_entropy_z())
+                ]
+                if imitation_weight > 0 and teacher_action is not None:
+                    grad_z = [
+                        gz + imitation_weight * gt
+                        for gz, gt in zip(grad_z, self.grad_log_prob_z(teacher_action))
+                    ]
+                self.backward_from_output_grad(grad_z)
+                self.accumulate_grads()
+
+                # ── Critic: ∇MSE(V(s), G) ───────────────────────────────────
+                v_pred = values[t]
+                v_target = returns[t]
+                total_critic_loss += (v_pred - v_target) ** 2
+                # dMSE/dV = 2·(V − G) → backward com grad_output = (V − G)
+                critic.forward(sensors)
+                critic.backward_from_output_grad([v_pred - v_target])
+                critic.accumulate_grads()
+
+            # Aplica gradientes
+            self.apply_accumulated(learning_rate, regularization)
+            critic.apply_accumulated(learning_rate, regularization)
+
+            return {
+                'mean_reward'      : sum(r for _, _, r, *_ in episode) / len(episode),
+                'mean_return'      : sum(returns) / len(returns),
+                'mean_entropy'     : total_entropy / len(episode),
+                'action_counts'    : action_counts,
+                'mean_advantage'   : sum(advantages) / len(advantages),
+                'critic_loss'      : total_critic_loss / len(episode),
+            }
+
+        # ── Modo REINFORCE: baseline = média dos retornos ────────────────────
+        returns = compute_returns(scaled_rewards, gamma)
         baseline = sum(returns) / len(returns)
 
-        # Passos 4–5 — acumula o gradiente de cada passo e aplica no fim
         self.grad_acc = None
         total_entropy = 0.0
         action_counts = [0] * self.n_actions
@@ -444,8 +570,6 @@ class PolicyNetwork(MLP):
                 advantage * gl + entropy_coef * ge
                 for gl, ge in zip(self.grad_log_prob_z(action), self.grad_entropy_z())
             ]
-            # Estágio B: imitação híbrida — descer a CE da ação do professor
-            # equivale a subir logπ(a_professor|s): termo = +λ·∇logπ(a_prof)
             if imitation_weight > 0 and teacher_action is not None:
                 grad_z = [
                     gz + imitation_weight * gt

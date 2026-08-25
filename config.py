@@ -58,6 +58,10 @@ CONFIG = {
     'reward_scale'     : 5.0,   # Escala da recompensa — Fase 7: 5x maior (sinal forte)
     'log_csv'          : 'episodios.csv',  # Curva de recompensa média por episódio
 
+    # ── A2C (Fase 8): Actor-Critic ───────────────────────────────────────────
+    'value_coef'       : 0.5,   # Peso do critic loss no update combinado
+    'gae_lambda'       : 0.95,  # λ do GAE: trade-off viés/variancia do advantage
+
     # ── Autonomia (curriculum learning) ──────────────────────────────────────
     # (a autonomia por recompensa da Fase 1 foi substituída pelos estágios da
     #  Fase 4; o valor fica como referência do ganho de autonomia esperado)

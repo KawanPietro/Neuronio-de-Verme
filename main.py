@@ -8,7 +8,7 @@ from ursina import *
 
 from config import CONFIG
 from environment import Environment
-from mlp import ACTIONS, PolicyNetwork, entropy
+from mlp import ACTIONS, PolicyNetwork, CriticNetwork, entropy, save_brain, load_brain
 from perception import calculate_reward, get_sensor_inputs
 from worm import Worm
 
@@ -100,12 +100,18 @@ brain = PolicyNetwork(
     temperature=CONFIG['temperature'],
 )
 
+# ─── CRÍTICO (Fase 8 — A2C): V(s) 8 → 16 → 1 ──────────────────────────────
+critic = CriticNetwork(
+    CONFIG['n_inputs'],
+    CONFIG['n_hidden'],
+)
+
 # ─── MODO AVALIAÇÃO: testa a política SALVA (pesos.json) ───────────────────
 # A avaliação carrega o cérebro treinado e usa a temperatura de decisão (piso
 # do treino): política determinística, representativa do que foi aprendido.
 if EVAL_MODE:
     if os.path.exists(CONFIG['weights_file']):
-        brain.load_weights(CONFIG['weights_file'])
+        load_brain(CONFIG['weights_file'], brain, critic)
         print(f"  Avaliando pesos salvos em {CONFIG['weights_file']}")
     else:
         print(f"  ATENCAO: {CONFIG['weights_file']} nao existe — avaliando cerebro aleatorio")
@@ -445,7 +451,10 @@ def finish_episode():
         stats = episode_stats(brain, state['episode'])
     else:
         # B: REINFORCE + λ·CE ; C: REINFORCE puro (λ = 0)
-        stats = brain.update_episode(state['episode'], imitation_weight=lam)
+        # Fase 8: A2C — usa critic para GAE advantage
+        stats = brain.update_episode(state['episode'], imitation_weight=lam,
+                                     critic=critic, value_coef=CONFIG['value_coef'],
+                                     gae_lambda=CONFIG['gae_lambda'])
 
     if not EVAL_MODE:
         brain.learning_rate *= CONFIG['lr_decay']
@@ -491,7 +500,7 @@ def finish_episode():
 
     # Limite de episódios (treino com --episodes=N ou avaliação): salva e fecha
     if EVAL_EPISODES and state['episode_count'] >= EVAL_EPISODES:
-        brain.save_weights(CONFIG['weights_file'])
+        save_brain(CONFIG['weights_file'], brain, critic)
         print(f"\n-- Concluido ({EVAL_EPISODES} episodios): pesos salvos em {CONFIG['weights_file']}")
         quit()
 
@@ -675,12 +684,12 @@ def input(key):
         toggle_policy_grid()
 
     if key == 's':
-        brain.save_weights(CONFIG['weights_file'])
+        save_brain(CONFIG['weights_file'], brain, critic)
         print(f"  Pesos salvos em {CONFIG['weights_file']}")
 
     if key == 'l':
         if os.path.exists(CONFIG['weights_file']):
-            brain.load_weights(CONFIG['weights_file'])
+            load_brain(CONFIG['weights_file'], brain, critic)
             print(f"  Pesos carregados de {CONFIG['weights_file']}")
         else:
             print(f"  Nao ha pesos em {CONFIG['weights_file']}")

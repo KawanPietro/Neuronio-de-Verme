@@ -1,18 +1,15 @@
 """
-Teste do MLP e da política estocástica — critério de aceite da Fase 2.
+Testes do MLP, política e A2C — critérios de aceite das Fases 2/3/8.
 
-Verifica que o `backward` calcula os gradientes corretos comparando com a
-estimativa numérica por diferenças finitas (centrais). Objetivos testados:
-
-  1. Regressão:  L = Σ ½·(out − target)²   (MLP, saída tanh; oculta tanh e relu)
-  2. Política:   L = −log π(a|s)           (softmax sobre 5 ações; oculta tanh e relu)
+Verifica que o `backward` calcula gradientes corretos (diferenças finitas)
+e que os componentes A2C (Critic, GAE) funcionam.
 
 Rode com: python test_mlp.py
 """
 import math
 import random
 
-from mlp import MLP, PolicyNetwork, compute_returns
+from mlp import MLP, PolicyNetwork, CriticNetwork, compute_returns, compute_gae, save_brain, load_brain
 
 
 # ─── Acesso genérico a parâmetros ─────────────────────────────────────────────
@@ -219,12 +216,133 @@ def main():
     # 5 — REINFORCE episódico com baseline (Fase 3)
     results.append(test_update_episode())
 
+    # 6 — CriticNetwork: V(s) responde ao backward (Fase 8)
+    results.append(test_critic())
+
+    # 7 — GAE: advantage computa corretamente (Fase 8)
+    results.append(test_gae())
+
+    # 8 — A2C update_episode: actor + critic mudam pesos (Fase 8)
+    results.append(test_a2c_update())
+
+    # 9 — save/load combinado (actor + critic, Fase 8)
+    results.append(test_save_load_brain())
+
     print()
     if all(results):
-        print("Todos os gradientes conferem com as diferenças finitas.")
+        print("Todos os testes conferem.")
         return 0
-    print("Há divergências — revise o backward.")
+    print("Ha divergencias — revise o codigo.")
     return 1
+
+
+# ─── Testes da Fase 8 (A2C) ─────────────────────────────────────────────────
+
+def test_critic():
+    """CriticNetwork: V(s) muda após backward (gradiente real)."""
+    random.seed(42)
+    critic = CriticNetwork(8, n_hidden=16)
+    sensors = [random.uniform(-1, 1) for _ in range(8)]
+
+    v_before = critic.value(sensors)
+    # Forward + backward com grad = (V − target)
+    critic.forward(sensors)
+    critic.backward_from_output_grad([v_before - 1.0])  # target = 1.0
+    # Aplica um passo grande para garantir mudança
+    for i in range(critic.n_inputs):
+        for j in range(critic.n_hidden):
+            critic.w_input_hidden[i][j] -= 0.1 * critic.grad_w_input_hidden[i][j]
+    for j in range(critic.n_hidden):
+        critic.bias_hidden[j] -= 0.1 * critic.grad_bias_hidden[j]
+    for j in range(critic.n_hidden):
+        critic.w_hidden_output[j][0] -= 0.1 * critic.grad_w_hidden_output[j][0]
+    for k in range(critic.n_outputs):
+        critic.bias_output[k] -= 0.1 * critic.grad_bias_output[k]
+
+    v_after = critic.value(sensors)
+    assert v_before != v_after, "Critic nao mudou apos backward"
+    print("[OK] CriticNetwork -- V(s) responde ao backward")
+    return True
+
+
+def test_gae():
+    """GAE: advantage calcula corretamente para episodio simples."""
+    # Episodio de 3 passos: r=[1, 1, 1], V=[0.5, 0.5, 0.5], gamma=0.99, lambda=0.95
+    rewards = [1.0, 1.0, 1.0]
+    values  = [0.5, 0.5, 0.5]
+    gamma   = 0.99
+    lam     = 0.95
+
+    advantages = compute_gae(rewards, values, gamma, lam)
+
+    # δ_2 = 1.0 + 0.99*0 − 0.5 = 0.5 ;  A_2 = 0.5
+    # δ_1 = 1.0 + 0.99*0.5 − 0.5 = 0.995 ;  A_1 = 0.995 + 0.99*0.95*0.5 = 1.46525
+    # δ_0 = 1.0 + 0.99*0.5 − 0.5 = 0.995 ;  A_0 = 0.995 + 0.99*0.95*1.46525 ≈ 2.33087
+    assert len(advantages) == 3
+    assert abs(advantages[2] - 0.5) < 0.01, f"A[2] errado: {advantages[2]}"
+    assert advantages[1] > advantages[2], "A[1] deveria ser > A[2]"
+    assert advantages[0] > advantages[1], "A[0] deveria ser > A[1]"
+    print("[OK] GAE -- advantage computa corretamente")
+    return True
+
+
+def test_a2c_update():
+    """A2C update_episode: actor + critic mudam pesos."""
+    random.seed(42)
+    actor  = PolicyNetwork(8, 16, 5, temperature=1.0)
+    critic = CriticNetwork(8, n_hidden=16)
+
+    sensors = [random.uniform(-1, 1) for _ in range(8)]
+    episode = [(sensors, random.randrange(5), random.uniform(-0.5, 0.5)) for _ in range(30)]
+
+    w_actor_before  = actor.w_hidden_output[0][0]
+    w_critic_before = critic.w_hidden_output[0][0]
+
+    stats = actor.update_episode(episode, gamma=0.9, learning_rate=0.01,
+                                 entropy_coef=0.01, regularization=0.0,
+                                 reward_scale=1.0, critic=critic,
+                                 value_coef=0.5, gae_lambda=0.95)
+
+    w_actor_after  = actor.w_hidden_output[0][0]
+    w_critic_after = critic.w_hidden_output[0][0]
+
+    assert w_actor_before != w_actor_after, "Actor nao mudou"
+    assert w_critic_before != w_critic_after, "Critic nao mudou"
+    assert 'mean_advantage' in stats, "Stats sem mean_advantage"
+    assert 'critic_loss' in stats, "Stats sem critic_loss"
+    print("[OK] A2C update_episode -- actor + critic atualizam pesos")
+    return True
+
+
+def test_save_load_brain():
+    """Save/load combinado: actor + critic preservados em JSON."""
+    import tempfile
+    import os
+    random.seed(42)
+    actor  = PolicyNetwork(8, 16, 5, temperature=1.0)
+    critic = CriticNetwork(8, n_hidden=16)
+    path = os.path.join(tempfile.gettempdir(), 'teste_brain.json')
+
+    sensors = [random.uniform(-1, 1) for _ in range(8)]
+    probs_before = actor.probabilities(sensors)
+    v_before = critic.value(sensors)
+
+    save_brain(path, actor, critic)
+    actor.reset()
+    critic.reset()
+
+    load_brain(path, actor, critic)
+    probs_after = actor.probabilities(sensors)
+    v_after = critic.value(sensors)
+
+    ok_actor  = all(abs(a - b) < 1e-9 for a, b in zip(probs_before, probs_after))
+    ok_critic = abs(v_before - v_after) < 1e-9
+    os.remove(path)
+
+    assert ok_actor, "Actor probs divergem apos load"
+    assert ok_critic, "Critic value diverge apos load"
+    print("[OK] save/load brain -- actor + critic preservados")
+    return True
 
 
 if __name__ == '__main__':
