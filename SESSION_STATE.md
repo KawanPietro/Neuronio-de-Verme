@@ -1,10 +1,10 @@
 # ESTADO DA SESSÃO — 2026-08-20
 
 ## Status atual
-- Fases 0–6 completas e validadas
-- **Fase 7 concluída (resultados parciais)**: engenharia de recompensa implementada, multi-seed (5 sementes) rodado
-- **DoD NÃO atingido** (80% chegada sem perigo): melhor resultado = 40% (seed 5)
-- Último commit: `0a181ba` (push pendente — sem autenticação GitHub)
+- Fases 0–8 completas
+- **DoD item 2 NÃO atingido** (80%): melhor = 45% seed 3 (A2C), 39% eval longo
+- Último commit: `93753b2` (push pendente — sem autenticação GitHub)
+- Evolução: REINFORCE 10% → A2C 39% (4x melhoria)
 
 ## O que foi feito (Fases 0–6)
 
@@ -65,19 +65,19 @@
 **debug_sensores.py:**
 - C3 atualizado: idle_cost desativado, teste espera `r >= 0`
 
-### O que foi feito (Fase 7 — concluída)
-- config.py: rewards 5x, entropy 5x, lr 5x, proximity 1/dist, action_repeat_penalty
-- perception.py: potencial de proximidade (1/dist)
-- main.py: action_history tracking + repeat penalty
-- Multi-seed training (5 sementes, 100 eps cada)
-- Avaliação: seed 5 melhor = 40% (8/20 stage C seguro)
-- Avaliação longa: 100 eps = 20% (14/70 stage C seguro)
-- Política colapsa para UMA ação (frente/esquerda/direita) — problema estrutural do REINFORCE
+### O que foi feito (Fase 8 — A2C)
+- `mlp.py`: CriticNetwork (8→16→1, V(s)), compute_gae(), save_brain/load_brain
+- `config.py`: value_coef=0.5, gae_lambda=0.95
+- `main.py`: critic integrado no loop de treino + save/load combinado
+- `test_mlp.py`: 12 testes (4 novos: critic, GAE, A2C update, brain save/load)
+- Multi-seed eval (5 seeds × 100 eps): seed 3 = 45% (50 eps) / 39% (100 eps)
+- A2C é 2x mais estável que REINFORCE (39% vs 20% eval longo)
+- Política ainda colapsa para 1 ação, mas com mais variância que REINFORCE
 
-### O que falta fazer (Fase 8 — se necessário)
-1. **Trocar algoritmo**: PPO, A2C com value function, ou DQN com ε-greedy
-2. Ou: **treinar 500+ episódios** com multi-seed (pode convergir mais devagar)
-3. Ou: **aceitar resultado atual** e documentar limitações no README
+### O que falta fazer (Fase 9 — se necessário)
+1. **PPO** (Proximal Policy Optimization): clipping de gradientes, mais estável
+2. **Treinar 200+ episódios** com A2C + multi-seed (pode convergir mais)
+3. **Ou aceitar resultado** e documentar limitações (REINFORCE/A2C puros são fracos para este domínio)
 
 ### DoD (Definition of Done) do projeto
 1. `teacher_influence = 0` permanente → ✅ (Estágio C + `--eval`)

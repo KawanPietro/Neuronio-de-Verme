@@ -22,6 +22,7 @@
 | 5 | Métricas e memória | Medir, salvar e visualizar o aprendizado (cultura de dados) | S | ✅ concluída |
 | 6 | Robustez e calibração | Tuning, exploração, correção de casos-limite | S | ✅ concluída |
 | 7 | Engenharia de recompensa | Sinais fortes, anti-colapso, multi-seed | M | ✅ concluída (parcial) |
+| 8 | Actor-Critic (A2C) | Critic V(s) + GAE advantage | M | ✅ concluída (parcial) |
 
 > Estimativa de esforço relativa: S = pequena (1–2 sessões), M = média (2–4), L = grande (4+).
 
