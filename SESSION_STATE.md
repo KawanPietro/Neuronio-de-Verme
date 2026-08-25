@@ -1,10 +1,10 @@
 # ESTADO DA SESSÃO — 2026-08-20
 
 ## Status atual
-- Fases 0–8 completas
-- **DoD item 2 NÃO atingido** (80%): melhor = 45% seed 3 (A2C), 39% eval longo
-- Último commit: `93753b2` (push pendente — sem autenticação GitHub)
-- Evolução: REINFORCE 10% → A2C 39% (4x melhoria)
+- Fases 0–9 completas
+- **DoD item 2 NÃO atingido** (80%): melhor = 40% (A2C 39%, PPO 40%, ambos eval 100 eps)
+- Último commit: `8488820` (push pendente — sem autenticação GitHub)
+- Evolução: REINFORCE 10% → A2C 39% → PPO 40% (4x melhoria total)
 
 ## O que foi feito (Fases 0–6)
 
@@ -65,19 +65,19 @@
 **debug_sensores.py:**
 - C3 atualizado: idle_cost desativado, teste espera `r >= 0`
 
-### O que foi feito (Fase 8 — A2C)
-- `mlp.py`: CriticNetwork (8→16→1, V(s)), compute_gae(), save_brain/load_brain
-- `config.py`: value_coef=0.5, gae_lambda=0.95
-- `main.py`: critic integrado no loop de treino + save/load combinado
-- `test_mlp.py`: 12 testes (4 novos: critic, GAE, A2C update, brain save/load)
-- Multi-seed eval (5 seeds × 100 eps): seed 3 = 45% (50 eps) / 39% (100 eps)
-- A2C é 2x mais estável que REINFORCE (39% vs 20% eval longo)
-- Política ainda colapsa para 1 ação, mas com mais variância que REINFORCE
+### O que foi feito (Fase 9 — PPO)
+- `mlp.py`: `ppo_grad_log_prob_z()` clipped surrogate, `old_probs` storage
+- `config.py`: `ppo_clip=0.2`
+- `main.py`: `ppo_clip` passed to `update_episode`
+- `test_mlp.py`: 13 tests (1 new: PPO update)
+- Multi-seed eval (5 seeds × 100 eps): seed 2 = 40% (50 eps) / 40% (100 eps)
+- PPO ≈ A2C (40% vs 39%), ambos 2x mais estáveis que REINFORCE
 
-### O que falta fazer (Fase 9 — se necessário)
-1. **PPO** (Proximal Policy Optimization): clipping de gradientes, mais estável
-2. **Treinar 200+ episódios** com A2C + multi-seed (pode convergir mais)
-3. **Ou aceitar resultado** e documentar limitações (REINFORCE/A2C puros são fracos para este domínio)
+### Próximos passos possíveis (Fase 10+)
+1. **Treinar mais épocas** (500+ eps) com A2C/PPO — pode convergir mais
+2. **Hiperparâmetros** — ajustar ppo_clip, gae_lambda, lr, temperatura
+3. **Arquitetura** — rede maior (16→32→16), features adicionais
+4. **Aceitar limitação** — REINFORCE/A2C/PPO puros são fracos para este domínio
 
 ### DoD (Definition of Done) do projeto
 1. `teacher_influence = 0` permanente → ✅ (Estágio C + `--eval`)
