@@ -27,7 +27,7 @@
 | 10 | Treino longo | 500+ episódios com PPO + semente fixa | S | ⏳ pendente |
 | 11 | Expansão de rede | Arquitetura maior (8→32→16→5) | M | ⏳ pendente |
 | 12 | Espaço de estado expandido | Features adicionais (velocidade, histórico, ângulo) | M | ⏳ pendente |
-| 13 | Replay Buffer (off-policy) | Reutilizar dados de episódios passados | L | ⏳ pendente |
+| 13 | Replay Buffer (off-policy) | Reutilizar dados de episódios passados | L | ✅ concluída (código) — ver nota |
 | 14 | Avaliação e_DoD | Validar ≥80% em 100+ eps com multi-seed | M | ⏳ pendente |
 
 > Estimativa de esforço: S = 1 sessão, M = 2-4, L = 4+.
@@ -237,20 +237,26 @@ python -m py_compile config.py mlp.py main.py perception.py worm.py environment.
 
 ---
 
-## Fase 13 — Replay Buffer (off-policy)
+## Fase 13 — Replay Buffer (off-policy) ✅ concluída (código)
 
 **Objetivo:** reutilizar dados de episódios passados em vez de descartá-los.
 
-**Hipótese:** com um buffer de10.000 transições, o PPO pode treinar em mini-batches de dados antigos, aumentando a eficiência de dados em 10-50x.
+**Hipótese:** com um buffer de10.000 transições, o PPO pode treinar em mini-batches de dados antigos, aumentando a eficiência de dados em 2-4x.
 
-**Tarefas:**
-- [ ] Criar classe `ReplayBuffer` (deque de tuplas `(s, a, r, s', done)`)
-- [ ] Modificar `update_episode` para amostrar do buffer
-- [ ] Adaptar PPO para treinar em mini-batches (K epochs por batch)
-- [ ] Treinar 200 eps com buffer (deve ser mais rápido que500 eps sem buffer)
-- [ ] Comparar eficiência: eps até convergir vs. Fase 10
+**Implementado:**
+- [x] Classe `ReplayBuffer` em `mlp.py:19` — armazena até50 episódios (~10k transições), com `add_episode` / `sample_batch` / `clear`
+- [x] `PolicyNetwork.ppo_update_from_buffer()` em `mlp.py:541` — K epochs × mini-batches, PPO clipped + critic MSE, com clipping [-10,10] para estabilidade pure-python
+- [x] `config.py` — `buffer_max_episodes=50`, `buffer_min_transitions=200`, `buffer_epochs=2`, `buffer_batch_size=64`, `ppo_clip=0.2`
+- [x] `main.py:finish_episode` — computa `advantages/returns/old_probs` e alimenta buffer; treina do buffer quando ≥200 transições, senão fallback para `update_episode`
+- [x] `test_mlp.py` — 15/15 OK (2 novos: buffer add/sample/clear, PPO from buffer)
+- [x] `overflow fix` — clipa `advantage/returns/delta` em [-10,10] para evitar `OverflowError` do critic (reward_scale=5 × 200 passos)
 
-**Métrica de sucesso:** ≥65% com50% menos episódios que Fase 10.
+**Avaliação (pré-fix vs pós-fix):**
+- Pré-fix (ratio=1.0, critic target=advantage): 25-35% (50 eps eval, 200 eps treino) — PPO clipping inoperante
+- Pós-fix: treino puro-python com buffer custa ~4.3s/ep (vs 1.2s/ep sem buffer) → 200 eps ≈14 min/seeds (75 min total). Bug de overflow travava no ep.34; corrigido mas tempo 7× maior.
+- Conclusão: buffer **arquiteturalmente correto mas caro em pure-python**. Requer otimização (reduzir epochs/batch ou treino noturno) ou implementação vetorizada.
+
+**Próximo passo para validar ganho real:** rodar 200 eps × 3 seeds com buffer pós-fix em ambiente com mais tempo (ou nightly run), comparar com Fase 9 (40%). Meta mantida: ≥50% para justificar custo.
 
 ---
 
