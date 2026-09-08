@@ -65,6 +65,12 @@ CONFIG = {
     # ── PPO (Fase 9): Proximal Policy Optimization ───────────────────────────
     'ppo_clip'         : 0.2,   # ε do clipping: limita razão π_new/π_old em [1−ε, 1+ε]
 
+    # ── Replay Buffer (Fase 13) ──────────────────────────────────────────────
+    'buffer_max_episodes'  : 50,    # quantos episódios inteiros o buffer guarda
+    'buffer_min_transitions': 200,  # buffer mínimo antes de começar a treinar do buffer
+    'buffer_epochs'        : 4,     # quantas vezes cada mini-batch é reutilizado (K epochs)
+    'buffer_batch_size'    : 64,    # transições por mini-batch
+
     # ── Autonomia (curriculum learning) ──────────────────────────────────────
     # (a autonomia por recompensa da Fase 1 foi substituída pelos estágios da
     #  Fase 4; o valor fica como referência do ganho de autonomia esperado)

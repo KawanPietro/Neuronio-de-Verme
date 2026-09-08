@@ -9,7 +9,8 @@ Rode com: python test_mlp.py
 import math
 import random
 
-from mlp import MLP, PolicyNetwork, CriticNetwork, compute_returns, compute_gae, save_brain, load_brain
+from mlp import (MLP, PolicyNetwork, CriticNetwork, compute_returns,
+                  compute_gae, save_brain, load_brain, ReplayBuffer)
 
 
 # ─── Acesso genérico a parâmetros ─────────────────────────────────────────────
@@ -231,6 +232,12 @@ def main():
     # 10 — PPO clipped surrogate (Fase 9)
     results.append(test_ppo_update())
 
+    # 11 — Replay Buffer: add/sample/clear (Fase 13)
+    results.append(test_replay_buffer())
+
+    # 12 — PPO from buffer: actor + critic atualizam (Fase 13)
+    results.append(test_ppo_from_buffer())
+
     print()
     if all(results):
         print("Todos os testes conferem.")
@@ -374,6 +381,85 @@ def test_ppo_update():
     assert 'mean_advantage' in stats, "Stats sem mean_advantage"
     assert 'critic_loss' in stats, "Stats sem critic_loss"
     print("[OK] PPO update -- actor + critic atualizam com clipping")
+    return True
+
+
+def test_replay_buffer():
+    """Replay Buffer: add episodios, sample batches, clear."""
+    random.seed(42)
+    buf = ReplayBuffer(max_episodes=5)
+
+    # Adiciona3 episodios ficticios
+    for _ in range(3):
+        ep = [([random.uniform(-1, 1) for _ in range(8)],
+               random.randrange(5),
+               random.uniform(-0.5, 0.5),
+               None) for _ in range(20)]
+        advantages = [random.uniform(-1, 1) for _ in range(20)]
+        buf.add_episode(ep, advantages)
+
+    assert len(buf) == 60, f"Total transicoes errado: {len(buf)}"
+    assert buf.num_episodes() == 3, f"Num episodios errado: {buf.num_episodes()}"
+
+    # Amostra um batch
+    batch = buf.sample_batch(10)
+    assert len(batch) == 10, f"Batch size errado: {len(batch)}"
+    assert 'sensors' in batch[0], "Batch sem campo 'sensors'"
+    assert 'advantage' in batch[0], "Batch sem campo 'advantage'"
+
+    #Limpa
+    buf.clear()
+    assert len(buf) == 0, "Buffer nao esvaziou"
+    assert buf.num_episodes() == 0, "Episodios nao zeraram"
+
+    #Limite de capacidade: adiciona6 episodios num buffer de 5
+    for _ in range(6):
+        ep = [([random.uniform(-1, 1) for _ in range(8)],
+               random.randrange(5),
+               random.uniform(-0.5, 0.5),
+               None) for _ in range(20)]
+        advantages = [random.uniform(-1, 1) for _ in range(20)]
+        buf.add_episode(ep, advantages)
+
+    assert buf.num_episodes() == 5, f"Buffer deveria ter 5 eps, tem {buf.num_episodes()}"
+
+    print("[OK] Replay Buffer -- add/sample/clear/capacity")
+    return True
+
+
+def test_ppo_from_buffer():
+    """PPO from buffer: actor + critic mudam pesos com mini-batches."""
+    random.seed(42)
+    actor  = PolicyNetwork(8, 16, 5, temperature=1.0)
+    critic = CriticNetwork(8, n_hidden=16)
+    buf = ReplayBuffer(max_episodes=10)
+
+    # Preenche buffer com episodios ficticios
+    for _ in range(5):
+        sensors = [random.uniform(-1, 1) for _ in range(8)]
+        ep = [(sensors, random.randrange(5), random.uniform(-0.5, 0.5), None)
+              for _ in range(30)]
+        advantages = [random.uniform(-1, 1) for _ in range(30)]
+        buf.add_episode(ep, advantages)
+
+    w_actor_before  = actor.w_hidden_output[0][0]
+    w_critic_before = critic.w_hidden_output[0][0]
+
+    stats = actor.ppo_update_from_buffer(
+        buf, critic, epochs=2, batch_size=16,
+        gamma=0.9, learning_rate=0.01, entropy_coef=0.01,
+        regularization=0.0, reward_scale=1.0,
+        value_coef=0.5, gae_lambda=0.95, ppo_clip=0.2,
+    )
+
+    w_actor_after  = actor.w_hidden_output[0][0]
+    w_critic_after = critic.w_hidden_output[0][0]
+
+    assert w_actor_before != w_actor_after, "Actor nao mudou"
+    assert w_critic_before != w_critic_after, "Critic nao mudou"
+    assert stats['buffer_size'] == 150, f"Buffer size errado: {stats['buffer_size']}"
+    assert stats['buffer_episodes'] == 5, f"Buffer eps errado: {stats['buffer_episodes']}"
+    print("[OK] PPO from buffer -- actor + critic atualizam com mini-batches")
     return True
 
 

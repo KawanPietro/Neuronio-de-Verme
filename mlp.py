@@ -5,6 +5,97 @@ import random
 from config import CONFIG
 
 
+# ─── Replay Buffer (Fase 13) ────────────────────────────────────────────────
+#
+# Armazena transições de episódios passados e reutiliza cada transição K vezes
+# (mini-batches + epochs). Isso aumenta drasticamente a eficiência de dados:
+#
+#   PPO sem buffer: 1 batch de dados → 1 update → descarta
+#   PPO com buffer: 1 batch de dados → K updates (mini-batches) → descarta
+#
+# Cada transição é uma tupla: (sensors, action, reward, done, old_prob_a)
+# O advantage (GAE) é computado por episódio no momento da inserção.
+
+class ReplayBuffer:
+
+    def __init__(self, max_episodes=50):
+        """
+        max_episodes: quantos episódios inteiros o buffer guarda.
+        Cada episódio tem ~200 transições, então50 eps = ~10.000 transições.
+        """
+        self.max_episodes = max_episodes
+        self.episodes = []   # lista de episódios: cada um é uma lista de tuplas
+        self.total_transitions = 0
+
+    def add_episode(self, episode, advantages, returns=None, old_probs=None):
+        """
+        Adiciona um episódio completo ao buffer.
+
+        episode:     lista de (sensors, action, reward, teacher_action)
+        advantages:  lista de floats (GAE advantage, mesmo tamanho)
+        returns:     lista de floats G_t = A_t + V(s_t) (para critic)
+        old_probs:   lista de floats π_old(a_t|s_t) (para PPO clipping)
+        """
+        assert len(episode) == len(advantages), "episode e advantages devem ter mesmo tamanho"
+
+        # Converte para tuplas compactas (só o necessário para PPO)
+        buffer_episode = []
+        for t, (sensors, action, reward, _) in enumerate(episode):
+            entry = {
+                'sensors' : list(sensors),
+                'action'  : action,
+                'reward'  : reward,
+                'advantage': advantages[t],
+            }
+            if returns is not None:
+                entry['returns'] = returns[t]
+            if old_probs is not None:
+                entry['old_prob'] = old_probs[t]
+            buffer_episode.append(entry)
+
+        self.episodes.append(buffer_episode)
+        self.total_transitions += len(buffer_episode)
+
+        # Remove episódios antigos se buffer estourou
+        while len(self.episodes) > self.max_episodes:
+            old = self.episodes.pop(0)
+            self.total_transitions -= len(old)
+
+    def sample_batch(self, batch_size):
+        """
+        Amostra um mini-batch aleatório de transições de episódios DIFERENTES.
+        Retorna lista de dicts com sensors, action, reward, advantage.
+        """
+        if self.total_transitions == 0:
+            return []
+
+        batch = []
+        for _ in range(batch_size):
+            # Escolhe um episódio aleatório
+            ep = random.choice(self.episodes)
+            # Escolhe uma transição aleatória desse episódio
+            batch.append(random.choice(ep))
+        return batch
+
+    def get_all_transitions(self):
+        """Retorna todas as transições do buffer (para debug/tamanho)."""
+        all_t = []
+        for ep in self.episodes:
+            all_t.extend(ep)
+        return all_t
+
+    def clear(self):
+        """Esvazia o buffer."""
+        self.episodes.clear()
+        self.total_transitions = 0
+
+    def __len__(self):
+        return self.total_transitions
+
+    def num_episodes(self):
+        return len(self.episodes)
+
+
 # ─── Funções de ativação ──────────────────────────────────────────────────────
 
 def tanh(x):
@@ -453,6 +544,107 @@ class PolicyNetwork(MLP):
                     (1.0 if k == action else 0.0) - p
                 )
                 for k, p in enumerate(self.last_probs)]
+
+    # ── PPO update a partir do Replay Buffer (Fase 13) ───────────────────────
+    #
+    # Em vez de treinar com os dados do episódio atual e descartar,
+    # amostra mini-batches do buffer e faz K epochs de update.
+    # Cada transição é reutilizada K vezes → eficiência de dados ×K.
+
+    def ppo_update_from_buffer(self, buffer, critic, epochs=4, batch_size=64,
+                               gamma=None, learning_rate=None, entropy_coef=None,
+                               regularization=None, reward_scale=None,
+                               value_coef=0.5, gae_lambda=0.95, ppo_clip=0.2):
+        """
+        Treina actor + critic com mini-batches do replay buffer.
+
+        epochs:      quantas vezes o buffer inteiro é processado
+        batch_size:  transições por mini-batch
+        Retorna: dict com estatísticas compatíveis com update_episode()
+        """
+        if gamma is None:
+            gamma = CONFIG['gamma']
+        if learning_rate is None:
+            learning_rate = self.learning_rate
+        if entropy_coef is None:
+            entropy_coef = CONFIG['entropy_coef']
+        if regularization is None:
+            regularization = CONFIG['regularization']
+        if reward_scale is None:
+            reward_scale = CONFIG['reward_scale']
+
+        total_critic_loss = 0.0
+        total_entropy = 0.0
+        total_samples = 0
+        action_counts = [0] * self.n_actions
+
+        for _ in range(epochs):
+            batch = buffer.sample_batch(batch_size)
+            if not batch:
+                continue
+
+            # Acumula gradientes do batch
+            self.grad_acc = None
+            critic.grad_acc = None
+
+            for transition in batch:
+                sensors = transition['sensors']
+                action = transition['action']
+                advantage = transition['advantage']
+                # Usa old_prob guardado no momento da coleta (se não houver, usa prob atual)
+                old_prob_a = transition.get('old_prob', None)
+                v_target = transition.get('returns', advantage)
+
+                # ── Actor: PPO clipped surrogate ────────────────────────────
+                self.probabilities(sensors)
+                total_entropy += entropy(self.last_probs)
+                action_counts[action] += 1
+                total_samples += 1
+
+                if old_prob_a is not None:
+                    grad_z = [
+                        g + entropy_coef * ge
+                        for g, ge in zip(
+                            self.ppo_grad_log_prob_z(action, old_prob_a,
+                                                      advantage, ppo_clip),
+                            self.grad_entropy_z()
+                        )
+                    ]
+                else:
+                    grad_z = [
+                        advantage * gl + entropy_coef * ge
+                        for gl, ge in zip(self.grad_log_prob_z(action),
+                                          self.grad_entropy_z())
+                    ]
+                self.backward_from_output_grad(grad_z)
+                self.accumulate_grads()
+
+                # ── Critic: MSE(V(s), G_t) ─────────────────────────────────
+                v_pred = critic.value(sensors)
+                critic.forward(sensors)
+                critic.backward_from_output_grad([v_pred - v_target])
+                critic.accumulate_grads()
+
+                total_critic_loss += (v_pred - v_target) ** 2
+
+            # Aplica gradientes do batch
+            self.apply_accumulated(learning_rate, regularization)
+            critic.apply_accumulated(learning_rate, regularization)
+
+        # Estatísticas compatíveis com finish_episode (action_counts, mean_reward, etc.)
+        all_transitions = buffer.get_all_transitions()
+        mean_reward = sum(t['reward'] for t in all_transitions) / max(1, len(all_transitions))
+        n = max(1, total_samples)
+        return {
+            'mean_reward'     : mean_reward,
+            'mean_return'     : mean_reward,
+            'mean_entropy'    : total_entropy / n,
+            'action_counts'   : action_counts,
+            'mean_advantage'  : 0.0,
+            'critic_loss'     : total_critic_loss / n,
+            'buffer_episodes' : buffer.num_episodes(),
+            'buffer_size'     : len(buffer),
+        }
 
     # ── Atualização (ponte provisória para a Fase 3) ─────────────────────────
     #

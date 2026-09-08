@@ -8,7 +8,8 @@ from ursina import *
 
 from config import CONFIG
 from environment import Environment
-from mlp import ACTIONS, PolicyNetwork, CriticNetwork, entropy, save_brain, load_brain
+from mlp import (ACTIONS, PolicyNetwork, CriticNetwork, entropy, save_brain,
+                  load_brain, ReplayBuffer, compute_gae)
 from perception import calculate_reward, get_sensor_inputs
 from worm import Worm
 
@@ -105,6 +106,9 @@ critic = CriticNetwork(
     CONFIG['n_inputs'],
     CONFIG['n_hidden'],
 )
+
+# ─── REPLAY BUFFER (Fase 13) ────────────────────────────────────────────────
+replay_buffer = ReplayBuffer(max_episodes=CONFIG.get('buffer_max_episodes', 50))
 
 # ─── MODO AVALIAÇÃO: testa a política SALVA (pesos.json) ───────────────────
 # A avaliação carrega o cérebro treinado e usa a temperatura de decisão (piso
@@ -442,20 +446,49 @@ def finish_episode():
     lam = lambda_imitation()
 
     if EVAL_MODE:
-        # Avaliação (--eval): professor desligado e SEM treino — só mede.
+        # Avaliacao (--eval): professor desligado e SEM treino -- so mede.
         stats = episode_stats(brain, state['episode'])
     elif stage == 'A':
-        # Imitação pura: um passo de CE por passo do episódio (ação do professor)
+        # Imitacao pura: um passo de CE por passo do episodio (acao do professor)
         for sensors, _, _, t_action in state['episode']:
             brain.imitate(sensors, t_action)
         stats = episode_stats(brain, state['episode'])
     else:
-        # B: REINFORCE + λ·CE ; C: REINFORCE puro (λ = 0)
-        # Fase 9: PPO — GAE advantage + clipped surrogate + critic
-        stats = brain.update_episode(state['episode'], imitation_weight=lam,
-                                     critic=critic, value_coef=CONFIG['value_coef'],
-                                     gae_lambda=CONFIG['gae_lambda'],
-                                     ppo_clip=CONFIG['ppo_clip'])
+        # ── Fase 13: Replay Buffer ──────────────────────────────────────────
+        # 1) Coleta V(s), GAE advantages, returns e π_old(a|s) para este episodio
+        scaled_rewards = [r * CONFIG['reward_scale'] for _, _, r, _ in state['episode']]
+        values = []
+        for sensors, *_ in state['episode']:
+            values.append(critic.value(sensors))
+        advantages = compute_gae(scaled_rewards, values, CONFIG['gamma'],
+                                CONFIG['gae_lambda'])
+        returns = [a + v for a, v in zip(advantages, values)]
+        # π_old(a|s): probabilidade da ação tomada sob a política atual
+        old_probs_list = []
+        for sensors, action, *_ in state['episode']:
+            brain.probabilities(sensors)
+            old_probs_list.append(brain.last_probs[action])
+
+        # 2) Adiciona episodio ao replay buffer (com returns e old_probs)
+        replay_buffer.add_episode(state['episode'], advantages,
+                                  returns=returns, old_probs=old_probs_list)
+
+        # 3) Treina com mini-batches do buffer (K epochs, reuse de dados)
+        if len(replay_buffer) >= CONFIG.get('buffer_min_transitions', 200):
+            stats = brain.ppo_update_from_buffer(
+                replay_buffer, critic,
+                epochs=CONFIG.get('buffer_epochs', 4),
+                batch_size=CONFIG.get('buffer_batch_size', 64),
+                ppo_clip=CONFIG['ppo_clip'],
+                value_coef=CONFIG['value_coef'],
+                gae_lambda=CONFIG['gae_lambda'],
+            )
+        else:
+            # Buffer ainda pequeno: treina com o episodio atual (PPO direto)
+            stats = brain.update_episode(state['episode'], imitation_weight=lam,
+                                         critic=critic, value_coef=CONFIG['value_coef'],
+                                         gae_lambda=CONFIG['gae_lambda'],
+                                         ppo_clip=CONFIG['ppo_clip'])
 
     if not EVAL_MODE:
         brain.learning_rate *= CONFIG['lr_decay']
