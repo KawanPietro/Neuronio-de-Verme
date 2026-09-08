@@ -590,10 +590,11 @@ class PolicyNetwork(MLP):
             for transition in batch:
                 sensors = transition['sensors']
                 action = transition['action']
-                advantage = transition['advantage']
+                # Clip advantage/returns para evitar overflow do critic
+                advantage = max(-10.0, min(10.0, transition['advantage']))
                 # Usa old_prob guardado no momento da coleta (se não houver, usa prob atual)
                 old_prob_a = transition.get('old_prob', None)
-                v_target = transition.get('returns', advantage)
+                v_target = max(-10.0, min(10.0, transition.get('returns', advantage)))
 
                 # ── Actor: PPO clipped surrogate ────────────────────────────
                 self.probabilities(sensors)
@@ -621,11 +622,12 @@ class PolicyNetwork(MLP):
 
                 # ── Critic: MSE(V(s), G_t) ─────────────────────────────────
                 v_pred = critic.value(sensors)
+                delta = max(-10.0, min(10.0, v_pred - v_target))
                 critic.forward(sensors)
-                critic.backward_from_output_grad([v_pred - v_target])
+                critic.backward_from_output_grad([delta])
                 critic.accumulate_grads()
 
-                total_critic_loss += (v_pred - v_target) ** 2
+                total_critic_loss += delta ** 2
 
             # Aplica gradientes do batch
             self.apply_accumulated(learning_rate, regularization)
@@ -753,7 +755,8 @@ class PolicyNetwork(MLP):
 
             for t, item in enumerate(episode):
                 sensors, action, _, teacher_action = (item + (None, None))[:4]
-                advantage = advantages[t]
+                # Clip advantage para evitar gradiente explosivo
+                advantage = max(-10.0, min(10.0, advantages[t]))
 
                 # ── Actor: ∇logπ · advantage + β·∇H ─────────────────────────
                 self.probabilities(sensors)
@@ -787,11 +790,12 @@ class PolicyNetwork(MLP):
 
                 # ── Critic: ∇MSE(V(s), G) ───────────────────────────────────
                 v_pred = values[t]
-                v_target = returns[t]
-                total_critic_loss += (v_pred - v_target) ** 2
+                v_target = max(-10.0, min(10.0, returns[t]))
+                delta = max(-10.0, min(10.0, v_pred - v_target))
+                total_critic_loss += delta ** 2
                 # dMSE/dV = 2·(V − G) → backward com grad_output = (V − G)
                 critic.forward(sensors)
-                critic.backward_from_output_grad([v_pred - v_target])
+                critic.backward_from_output_grad([delta])
                 critic.accumulate_grads()
 
             # Aplica gradientes

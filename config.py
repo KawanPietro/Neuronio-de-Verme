@@ -68,7 +68,7 @@ CONFIG = {
     # ── Replay Buffer (Fase 13) ──────────────────────────────────────────────
     'buffer_max_episodes'  : 50,    # quantos episódios inteiros o buffer guarda
     'buffer_min_transitions': 200,  # buffer mínimo antes de começar a treinar do buffer
-    'buffer_epochs'        : 4,     # quantas vezes cada mini-batch é reutilizado (K epochs)
+    'buffer_epochs'        : 2,     # quantas vezes cada mini-batch é reutilizado (K epochs) — 2 para estabilidade pure-python
     'buffer_batch_size'    : 64,    # transições por mini-batch
 
     # ── Autonomia (curriculum learning) ──────────────────────────────────────
