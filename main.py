@@ -473,18 +473,18 @@ def finish_episode():
         replay_buffer.add_episode(state['episode'], advantages,
                                   returns=returns, old_probs=old_probs_list)
 
-        # 3) Treina com mini-batches do buffer (K epochs, reuse de dados)
-        if len(replay_buffer) >= CONFIG.get('buffer_min_transitions', 200):
+        # 3) Treina — buffer só em modo batch (--episodes), interativo usa PPO direto (fluido)
+        use_buffer = (EVAL_EPISODES is not None) and len(replay_buffer) >= CONFIG.get('buffer_min_transitions', 200)
+        if use_buffer:
             stats = brain.ppo_update_from_buffer(
                 replay_buffer, critic,
-                epochs=CONFIG.get('buffer_epochs', 4),
+                epochs=CONFIG.get('buffer_epochs', 2),
                 batch_size=CONFIG.get('buffer_batch_size', 64),
                 ppo_clip=CONFIG['ppo_clip'],
                 value_coef=CONFIG['value_coef'],
                 gae_lambda=CONFIG['gae_lambda'],
             )
         else:
-            # Buffer ainda pequeno: treina com o episodio atual (PPO direto)
             stats = brain.update_episode(state['episode'], imitation_weight=lam,
                                          critic=critic, value_coef=CONFIG['value_coef'],
                                          gae_lambda=CONFIG['gae_lambda'],
