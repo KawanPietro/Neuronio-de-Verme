@@ -69,10 +69,12 @@ ground_collider = Entity(
     y=0,
 )
 
-# ─── AMBIENTE (FONTES DE LUZ E CHUVA) ─────────────────────────────────────────
+# ─── AMBIENTE (FONTES DE LUZ E CHUVA + OBSTÁCULOS) ────────────────────────────
 env = Environment()
 env.place_light(Vec3(10, 1, 10))
 env.place_rain(Vec3(-10, 1, -10))
+if CONFIG['difficulty'] > 0:
+    env.randomize_obstacles(difficulty=CONFIG['difficulty'])
 
 # ─── VERME ────────────────────────────────────────────────────────────────────
 worm = Worm()
@@ -132,7 +134,10 @@ state = {
     'pulse_timer'     : 0.0,
     'prev_dist_light' : None,
     'prev_dist_rain'  : None,
+    'prev_dist_obs'   : None,
     'prev_position'   : None,
+    'steps_in_obstacle': 0,  # Fase 15
+    'difficulty'      : CONFIG['difficulty'],
     'episode'         : [],     # (sensors, action, reward, acao_professor) — Fases 3/4
     'episode_count'   : 0,      # quantos episódios já treinaram
     'force_autonomy'  : False,  # tecla A: professor desligado (autonomia forçada = 1)
@@ -151,7 +156,7 @@ csv_writer = csv.writer(log_csv)
 csv_writer.writerow(['episodio', 'estagio', 'recompensa_total', 'recompensa_media',
                      'retorno_medio', 'entropia_media', 'learning_rate',
                      'lambda_imitacao', 'autonomia_forcada',
-                     'chegada_chuva', 'perigo_luz', 'acao_principal', 'semente'])
+                     'chegada_chuva', 'perigo_luz', 'colisao_obs', 'acao_principal', 'semente', 'dificuldade'])
 
 # ─── HUD (Fase 5) ─────────────────────────────────────────────────────────────
 hud = Text(
@@ -236,6 +241,18 @@ def get_target_direction():
         combined += Vec3(0, 0, 1) * (1.0 + (-limit + margin - p.z) / margin)
     if p.z > limit - margin:
         combined += Vec3(0, 0, -1) * (1.0 + (p.z - (limit - margin)) / margin)
+
+    # ── Desvio de obstáculos (Fase 15) — professor contorna a pedra
+    for obs in getattr(env, 'obstacles', []):
+        to_obs = obs.position - worm.head.position
+        d = to_obs.length()
+        avoid_r = CONFIG['obstacle_radius'] * 2.2
+        if 0.1 < d < avoid_r:
+            # Repulsão proporcional + componente lateral para contornar
+            away = (worm.head.position - obs.position).normalized()
+            lateral = Vec3(away.z, 0, -away.x)  # tangente para contornar
+            weight = (avoid_r - d) / avoid_r
+            combined += away * weight * 1.4 + lateral * weight * 0.6
 
     if Vec3(combined).length() > 0.01:
         return Vec3(combined).normalized()
@@ -359,24 +376,27 @@ def refresh_policy_grid():
             newdir = turn_vector(Vec3(0, 0, 1), TURN_MULTIPLIERS[action] * max_turn)
             pivot.rotation_y = math.degrees(math.atan2(newdir.x, newdir.z))
 
-            # Cor: verde se aponta p/ chuva, vermelho se p/ luz, cinza se neutro
+            # Cor: verde se aponta p/ chuva, laranja se perto de obstáculo, vermelho se p/ luz
             to_rain = _nearest_dist(pivot.position, env.rain_sources)
             to_light = _nearest_dist(pivot.position, env.light_sources)
-            color = color.gray
+            to_obs = _nearest_dist(pivot.position, env.obstacles)
+            c = color.gray
             if to_rain is not None:
                 d = Vec3(pivot.position.x, 0, pivot.position.z)
                 r = min(env.rain_sources, key=lambda s: (Vec3(s.x, 0, s.z) - d).length())
                 toward_rain = (Vec3(r.x, 0, r.z) - d).normalized()
                 if newdir.dot(toward_rain) > 0.25:
-                    color = color.lime
+                    c = color.lime
             if to_light is not None:
                 d = Vec3(pivot.position.x, 0, pivot.position.z)
                 l = min(env.light_sources, key=lambda s: (Vec3(s.x, 0, s.z) - d).length())
                 toward_light = (Vec3(l.x, 0, l.z) - d).normalized()
                 if newdir.dot(toward_light) > 0.25:
-                    color = color.red.tint(-0.2)
+                    c = color.red.tint(-0.2)
+            if to_obs is not None and to_obs < CONFIG['obstacle_radius'] * 1.5:
+                c = color.orange
             for child in pivot.children:
-                child.color = color
+                child.color = c
 
 
 def toggle_policy_grid():
@@ -399,9 +419,11 @@ def update_hud():
     media = sum(rolling) / len(rolling) if rolling else 0.0
     stage = current_stage()
     ent = entropy(brain.last_probs) if brain.last_probs else 0.0
+    lvl = CONFIG['difficulty_levels'].get(state['difficulty'], CONFIG['difficulty_levels'][1])
     hud.text = (
         f"episodio : {state['episode_count']}\n"
         f"estagio  : {stage} ({STAGE_NAMES[stage]})\n"
+        f"nivel    : {lvl['label']} ({state['difficulty']})  obs:{len(env.obstacles)}\n"
         f"recompensa media (roll {len(rolling)}/{window}): {media:+.2f}\n"
         f"entropia : {ent:.3f}\n"
         f"learning rate: {brain.learning_rate:.5f}\n"
@@ -422,11 +444,13 @@ def reset():
         'pulse_timer'     : 0.0,
         'prev_dist_light' : None,
         'prev_dist_rain'  : None,
+        'prev_dist_obs'   : None,
         'prev_position'   : None,
         'episode'         : [],
         'episode_count'   : 0,
         'steps_in_rain'   : 0,
         'steps_in_danger' : 0,
+        'steps_in_obstacle': 0,
         'episode_rewards' : [],
     })
     brain.reset()
@@ -517,18 +541,21 @@ def finish_episode():
         int(state['force_autonomy']),
         round(state['steps_in_rain'] / h, 3),
         round(state['steps_in_danger'] / h, 3),
+        round(state['steps_in_obstacle'] / h, 3),
         ACTIONS[principal],
         CONFIG['seed'],
+        state['difficulty'],
     ])
     log_csv.flush()
 
     actions = ' '.join(f"{ACTIONS[a][:6]}:{c}" for a, c in enumerate(stats['action_counts']))
+    lvl = CONFIG['difficulty_levels'][state['difficulty']]['label']
     print(
-        f"\n-- Episodio {state['episode_count']} [estagio {stage}: {STAGE_NAMES[stage]}] -----\n"
+        f"\n-- Episodio {state['episode_count']} [estagio {stage}: {STAGE_NAMES[stage]}][{lvl}] -----\n"
         f"  total={total:+.1f}  media={stats['mean_reward']:+.4f}  "
         f"entropia={stats['mean_entropy']:.3f}  lr={brain.learning_rate:.5f}\n"
         f"  lambda_imit={lam:.3f}  chegada_chuva={state['steps_in_rain']/h:.2f}  "
-        f"perigo_luz={state['steps_in_danger']/h:.2f}\n"
+        f"perigo_luz={state['steps_in_danger']/h:.2f}  colisao_obs={state['steps_in_obstacle']/h:.2f}\n"
         f"  acoes: {actions}\n"
     )
 
@@ -539,13 +566,17 @@ def finish_episode():
         quit()
 
     env.randomize_sources()
+    if CONFIG['difficulty'] > 0:
+        env.randomize_obstacles(difficulty=state['difficulty'])
     worm.reset()
     worm.head.position = Vec3(random.uniform(-8, 8), CONFIG['segment_size'] / 2, random.uniform(-8, 8))
     state['episode'] = []
     state['steps_in_rain'] = 0
     state['steps_in_danger'] = 0
+    state['steps_in_obstacle'] = 0
     state['action_history'] = []
     state['prev_position'] = Vec3(worm.head.position)
+    state['prev_dist_obs'] = None
 
 
 # ─── UPDATE (loop único por frame) ────────────────────────────────────────────
@@ -610,11 +641,11 @@ def update():
     # Mistura conforme a autonomia (autonomy=0 → 100% professor)
     turn = lerp(teacher_turn, policy_turn, autonomy)
 
-    # Aplica o giro e move
+    # Aplica o giro e move (com colisão em obstáculos)
     new_dir = turn_vector(worm.direction, turn)
     if new_dir.length() > 0.01:
         worm.direction = new_dir.normalized()
-    worm.step(time.dt)
+    worm.step(time.dt, env)
 
     # ── Recompensa por passo e coleta do episódio (Fases 3/4) ─────────────────
     reward = calculate_reward(worm, env, state)
@@ -640,6 +671,10 @@ def update():
         state['steps_in_rain'] += 1
     if dist_light is not None and dist_light < CONFIG['arrival_radius']:
         state['steps_in_danger'] += 1
+    # Fase 15: colisão com obstáculo
+    dist_obs = _nearest_dist(worm.head.position, env.obstacles)
+    if dist_obs is not None and dist_obs < CONFIG['obstacle_radius']:
+        state['steps_in_obstacle'] += 1
 
     # ── Treino episódico: chega em H passos → treina e troca a cena ───────────
     if len(state['episode']) >= CONFIG['episode_steps']:
@@ -709,6 +744,16 @@ def input(key):
     if key == 'r':
         reset()
 
+    if key == 'o':
+        # Cicla nível de dificuldade 0→1→2→3→0 (Fase 15)
+        state['difficulty'] = (state['difficulty'] + 1) % 4
+        CONFIG['difficulty'] = state['difficulty']
+        env.clear_obstacles()
+        if state['difficulty'] > 0:
+            env.randomize_obstacles(difficulty=state['difficulty'])
+        lvl = CONFIG['difficulty_levels'][state['difficulty']]
+        print(f"  Dificuldade: {lvl['label']} ({state['difficulty']}) — {lvl['n_obstacles']} obstaculos")
+
     if key == 'a':
         state['force_autonomy'] = not state['force_autonomy']
         print(f"  Professor {'DESLIGADO' if state['force_autonomy'] else 'LIGADO'} "
@@ -749,6 +794,7 @@ print("  Botão direito + mouse -> orbitar câmera")
 print("  WASD                  -> mover foco da câmera")
 print("  Scroll                -> zoom")
 print("  R                     -> reiniciar verme e cérebro")
+print("  O                     -> ciclar dificuldade 0 LIVRE → 3 DIFICIL (pedras)")
 print("  A                     -> ligar/desligar PROFESSOR (autonomia total)")
 print("  P                     -> grade de setas da política aprendida")
 print("  S / L                 -> salvar / carregar pesos (pesos.json)")

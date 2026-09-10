@@ -27,10 +27,10 @@ def _xz_unit(to_vec):
     return 0.0, 0.0
 
 
-# ─── ESTADO (SENSORES 8-DIM) ──────────────────────────────────────────────────
+# ─── ESTADO (SENSORES 11-DIM) ─────────────────────────────────────────────────
 #
-# O verme agora "vê" geometria, não só proximidade. Isso dá à rede a informação
-# de EM QUE DIREÇÃO ir — sem isso, aprender a navegar é praticamente impossível.
+# O verme "vê" geometria + obstáculos. Isso dá à rede a informação de
+# EM QUE DIREÇÃO ir e O QUE desviar — sem isso, navegar com barreiras é impossível.
 #
 #   índice | feature       | significado
 #   -------+---------------+--------------------------------------------
@@ -42,13 +42,16 @@ def _xz_unit(to_vec):
 #   5      | chuva_dir.z   | (0, 0) se não houver fonte de chuva
 #   6      | chuva_dist    | distância normalizada [0,1] até essa chuva
 #   7      | pulso_chuva   | vibração (sinal de "tato"), em [0,1]
+#   8      | obs_dir.x     | vetor XZ unitário até o obstáculo mais próximo
+#   9      | obs_dir.z     | (0, 0) se não houver obstáculo
+#  10      | obs_dist      | distância normalizada [0,1] até esse obstáculo
 
 def get_sensor_inputs(worm, env, state) -> list:
-    """Devolve o estado com geometria: 8 features em [0,1] (direções em [-1,1])."""
+    """Devolve o estado com geometria: 11 features em [0,1] (direções em [-1,1])."""
     max_dist = CONFIG['sensor_max_dist']
     radius   = CONFIG['arrival_radius']
 
-    features = [0.0] * 8
+    features = [0.0] * 11
 
     # ── Luz ───────────────────────────────────────────────────────────────────
     light_src, dist_light = _nearest(worm, env.light_sources)
@@ -71,6 +74,16 @@ def get_sensor_inputs(worm, env, state) -> list:
 
     # ── Pulso de chuva (vibração) ─────────────────────────────────────────────
     features[7] = state['rain_pulse']
+
+    # ── Obstáculo mais próximo (Fase 15) ─────────────────────────────────────
+    obstacles = getattr(env, 'obstacles', [])
+    obs_src, dist_obs = _nearest(worm, obstacles)
+    if obs_src is not None:
+        to_obs = obs_src.position - worm.head.position
+        dx, dz = _xz_unit(to_obs)
+        features[8] = dx
+        features[9] = dz
+        features[10] = min(dist_obs / max_dist, 1.0)
 
     return features
 
@@ -103,6 +116,7 @@ def calculate_reward(worm, env, state) -> float:
 
     _, dist_rain  = _nearest(worm, env.rain_sources)
     _, dist_light = _nearest(worm, env.light_sources)
+    _, dist_obs   = _nearest(worm, getattr(env, 'obstacles', []))
 
     # ── Potencial de proximidade (Fase 7): sinal contínuo em 1/dist ──────────
     # Quando o verme está longe da chuva, ainda assim recebe um "puxão" suave.
@@ -137,6 +151,22 @@ def calculate_reward(worm, env, state) -> float:
         if dist_light < radius:
             reward -= CONFIG['inside_light_penalty']   # permanece no perigo
 
+    # ── Obstáculos (Fase 15): colisão, proximidade e progresso ───────────────
+    obs_radius = CONFIG['obstacle_radius']
+    if dist_obs is not None:
+        # Penalidade contínua por estar perto do obstáculo
+        if dist_obs > 0.1:
+            reward -= CONFIG['obstacle_proximity_penalty'] / max(dist_obs, 0.5)
+        # Colisão direta
+        prev_obs = state.get('prev_dist_obs', None)
+        if prev_obs is not None and dist_obs < obs_radius <= prev_obs:
+            reward -= CONFIG['obstacle_penalty']  # acabou de bater
+        if dist_obs < obs_radius:
+            reward -= CONFIG['obstacle_penalty'] * 0.3  # permanecer colado
+        # Progresso: afastar-se do obstáculo é bom
+        if prev_obs is not None and dist_obs is not None:
+            reward += CONFIG['obstacle_avoid_reward'] * (dist_obs - prev_obs)
+
     # ── Anti-farniente (desativado na Fase 7) ────────────────────────────────
     if CONFIG['idle_cost'] > 0 and state['prev_position'] is not None:
         movement = (worm.head.position - state['prev_position']).length()
@@ -146,6 +176,7 @@ def calculate_reward(worm, env, state) -> float:
     # ── Guarda o estado para o próximo passo ─────────────────────────────────
     state['prev_dist_rain']  = dist_rain
     state['prev_dist_light'] = dist_light
+    state['prev_dist_obs']   = dist_obs
     state['prev_position']   = Vec3(worm.head.position)
 
     return max(-1.0, min(1.0, reward))

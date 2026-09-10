@@ -69,8 +69,26 @@ class Worm:
             idx = min(int((i + 1) * CONFIG['segment_gap'] * (CONFIG['speed'] / 4)), len(self.history) - 1)
             seg.position = self.history[idx]
 
-    def step(self, dt):
-        """Move a cabeça conforme self.direction, limitado ao mapa."""
+    def step(self, dt, env=None):
+        """Move a cabeça conforme self.direction, limitado ao mapa e com colisão em obstáculos."""
+        # ── Teste de colisão simples (Fase 15): cancela movimento se colidiria
+        if env is not None and getattr(env, 'obstacles', []):
+            next_pos = self.head.position + self.direction * CONFIG['speed'] * dt
+            blocked = False
+            for obs in env.obstacles:
+                if (Vec3(next_pos.x, 0, next_pos.z) - Vec3(obs.x, 0, obs.z)).length() < CONFIG['obstacle_radius']:
+                    blocked = True
+                    break
+            if blocked:
+                # Desliza lateralmente em vez de atravessar: vira levemente
+                self.direction = Vec3(self.direction.z, 0, -self.direction.x).normalized() * 0.6 + self.direction * 0.4
+                self.direction = self.direction.normalized()
+                # Não avança neste frame
+                self.update_segments()
+                if self.direction.length() > 0:
+                    self.head.look_at(self.head.position + self.direction)
+                return
+
         self.head.position += self.direction * CONFIG['speed'] * dt
         self.head.x = max(-CONFIG['map_limit'], min(CONFIG['map_limit'], self.head.x))
         self.head.z = max(-CONFIG['map_limit'], min(CONFIG['map_limit'], self.head.z))

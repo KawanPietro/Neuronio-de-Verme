@@ -4,11 +4,12 @@ from ursina import *
 
 
 class Environment:
-    """Fontes editáveis (luz/chuva) e o sistema de partículas de chuva."""
+    """Fontes editáveis (luz/chuva), obstáculos e o sistema de partículas de chuva."""
 
     def __init__(self):
         self.light_sources = []
         self.rain_sources = []
+        self.obstacles = []       # Fase 15: blocos físicos que exigem desvio
         self.rain_particles = []
 
     def place_light(self, pos):
@@ -36,6 +37,22 @@ class Environment:
         self.rain_sources.append(src)
         self.rebuild_rain_particles()
 
+    def place_obstacle(self, pos, scale=2.0):
+        """Cria um obstáculo sólido (pedra) — Fase 15."""
+        from config import CONFIG
+        obs = Entity(
+            model='cube',
+            color=color.gray.tint(-0.15),
+            scale=(scale, scale * 0.9, scale),
+            position=Vec3(pos.x, scale * 0.45, pos.z),
+            collider='box',
+        )
+        # Detalhe visual: borda mais escura para destacar
+        Entity(model='cube', color=color.black33, scale=(scale*1.02, 0.12, scale*1.02),
+               position=Vec3(pos.x, 0.06, pos.z))
+        self.obstacles.append(obs)
+        return obs
+
     def delete_source(self, entity):
         """Remove uma fonte existente da cena."""
         if entity in self.light_sources:
@@ -45,6 +62,15 @@ class Environment:
             self.rain_sources.remove(entity)
             destroy(entity)
             self.rebuild_rain_particles()
+        elif entity in self.obstacles:
+            self.obstacles.remove(entity)
+            destroy(entity)
+
+    def clear_obstacles(self):
+        """Remove todos os obstáculos (troca de nível)."""
+        for obs in list(self.obstacles):
+            destroy(obs)
+        self.obstacles.clear()
 
     def randomize_sources(self, n_lights=1, n_rains=1, margin=4, limit=15):
         """
@@ -59,6 +85,30 @@ class Environment:
             self.place_light(Vec3(random.uniform(-limit, limit), 1, random.uniform(-limit, limit)))
         for _ in range(n_rains):
             self.place_rain(Vec3(random.uniform(-limit, limit), 1, random.uniform(-limit, limit)))
+
+    def randomize_obstacles(self, difficulty=1):
+        """Gera obstáculos conforme o nível de dificuldade — Fase 15."""
+        from config import CONFIG
+        self.clear_obstacles()
+        lvl = CONFIG['difficulty_levels'].get(difficulty, CONFIG['difficulty_levels'][1])
+        n = lvl['n_obstacles']
+        scale = lvl['obstacle_scale']
+        # Reserva centro livre e evita sobrepor luz/chuva
+        for _ in range(n):
+            for _ in range(12):  # tenta até 12 vezes achar posição válida
+                x = random.uniform(-13, 13)
+                z = random.uniform(-13, 13)
+                if abs(x) < 3 and abs(z) < 3:
+                    continue
+                ok = True
+                for src in self.light_sources + self.rain_sources:
+                    if abs(src.x - x) < 3.5 and abs(src.z - z) < 3.5:
+                        ok = False
+                        break
+                if not ok:
+                    continue
+                self.place_obstacle(Vec3(x, 0, z), scale=scale)
+                break
 
     def rebuild_rain_particles(self):
         """Recria todas as partículas de chuva ao redor das fontes atuais."""

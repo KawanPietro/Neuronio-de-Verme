@@ -381,15 +381,30 @@ def save_brain(path, actor, critic=None):
 
 
 def load_brain(path, actor, critic=None):
-    """Carrega actor (e opcionalmente critic) de um JSON."""
-    with open(path) as f:
-        data = json.load(f)
-    if 'actor' in data:
-        actor.set_params(data['actor'])
-    else:
-        actor.set_params(data)  # compatibilidade com pesos antigos (só actor)
-    if critic is not None and 'critic' in data:
-        critic.set_params(data['critic'])
+    """Carrega actor (e opcionalmente critic) de um JSON. Ignora pesos incompatíveis (ex: 8 vs 11 inputs)."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        actor_data = data['actor'] if 'actor' in data else data
+        # Verifica compatibilidade de dimensão (n_inputs)
+        w = actor_data.get('w_input_hidden', [])
+        if w and len(w) != actor.n_inputs:
+            print(f"  AVISO: pesos ignorados — n_inputs salvo={len(w)} vs esperado={actor.n_inputs} (treino novo necessário)")
+            return False
+        if 'actor' in data:
+            actor.set_params(data['actor'])
+        else:
+            actor.set_params(data)  # compatibilidade com pesos antigos (só actor)
+        if critic is not None and 'critic' in data:
+            cw = data['critic'].get('w_input_hidden', [])
+            if cw and len(cw) != critic.n_inputs:
+                print(f"  AVISO: critic ignorado — n_inputs salvo={len(cw)} vs esperado={critic.n_inputs}")
+            else:
+                critic.set_params(data['critic'])
+        return True
+    except Exception as e:
+        print(f"  AVISO: falha ao carregar pesos: {e}")
+        return False
 #
 # π(a|s) = softmax(W2·h + b2)  →  distribuição de probabilidade sobre ações.
 # A ação é AMOSTRADA (não é o argmax) — é isso que permite aprender por tentativa.

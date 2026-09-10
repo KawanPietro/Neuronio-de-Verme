@@ -29,6 +29,7 @@
 | 12 | Espaço de estado expandido | Features adicionais (velocidade, histórico, ângulo) | M | ⏳ pendente |
 | 13 | Replay Buffer (off-policy) | Reutilizar dados de episódios passados | L | ✅ concluída (código) — ver nota |
 | 14 | Avaliação e_DoD | Validar ≥80% em 100+ eps com multi-seed | M | ⏳ pendente |
+| 15 | Obstáculos e níveis | Pedras com colisão, 4 níveis, 11 sensores | M | ✅ concluída |
 
 > Estimativa de esforço: S = 1 sessão, M = 2-4, L = 4+.
 
@@ -259,6 +260,20 @@ python -m py_compile config.py mlp.py main.py perception.py worm.py environment.
 **Próximo passo para validar ganho real:** rodar 200 eps × 3 seeds com buffer pós-fix em ambiente com mais tempo (ou nightly run), comparar com Fase 9 (40%). Meta mantida: ≥50% para justificar custo.
 
 ---
+
+## Fase 15 — Obstáculos e níveis de dificuldade ✅ concluída
+
+**Objetivo:** complicar o ambiente para forçar aprendizado de desvio e navegação real.
+
+**Implementado:**
+- `config.py`: `difficulty` 0–3 (`LIVRE/FACIL/MEDIO/DIFICIL`), `obstacle_radius=2.5`, `obstacle_penalty=3.0`, `n_inputs` 8→11
+- `environment.py`: `obstacles[]`, `place_obstacle()`, `clear_obstacles()`, `randomize_obstacles(difficulty)` — até 7 pedras com colisão box, reserva centro e evita sobrepor luz/chuva
+- `perception.py`: sensores 11-dim (`obs_dir.x/z`, `obs_dist`), recompensa com colisão + proximidade + progresso de afastamento, `prev_dist_obs`
+- `worm.py`: `step(dt, env)` com teste de colisão simples — se `next_pos` dentro do raio, desliza lateralmente
+- `main.py`: `difficulty` no `state`, HUD mostra `nivel/label/obs:N`, CSV `colisao_obs`, professor contorna pedras (repulsão + tangente), `randomize_obstacles` por episódio, tecla **O** cicla 0→3, `--set=difficulty=N` para experimentos
+- `mlp.py`: `load_brain` com checagem de `n_inputs` — pesos antigos 8→11 são ignorados com aviso
+- Economia: 11×16+16×5=256 pesos (+13% vs 229) — treino novo necessário; pesos antigos incompatíveis são descartados automaticamente
+- **Níveis:** 0=0 pedras, 1=3×1.8, 2=5×2.2, 3=7×2.6 — cada nível aumenta densidade e exige desvio; use `python main.py --set=difficulty=0` para comparar baseline
 
 ## Fase 14 — Avaliação e DoD
 
