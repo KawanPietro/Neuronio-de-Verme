@@ -93,11 +93,12 @@ class Environment:
         lvl = CONFIG['difficulty_levels'].get(difficulty, CONFIG['difficulty_levels'][1])
         n = lvl['n_obstacles']
         scale = lvl['obstacle_scale']
+        lim = CONFIG['map_limit'] - 2
         # Reserva centro livre e evita sobrepor luz/chuva
         for _ in range(n):
             for _ in range(12):  # tenta até 12 vezes achar posição válida
-                x = random.uniform(-13, 13)
-                z = random.uniform(-13, 13)
+                x = random.uniform(-lim, lim)
+                z = random.uniform(-lim, lim)
                 if abs(x) < 3 and abs(z) < 3:
                     continue
                 ok = True

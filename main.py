@@ -44,17 +44,18 @@ DirectionalLight(y=2, z=-1)
 AmbientLight(color=Color(0.6, 0.6, 0.6, 1))  # Iluminação mais clara e vibrante
 
 # ─── CHÃO E CÉU ───────────────────────────────────────────────────────────────
+gs = CONFIG['ground_scale']
 Entity(
     model='plane',
-    scale=40,
+    scale=gs,
     texture='grass',  # Textura mais detalhada
-    texture_scale=(40, 40),
+    texture_scale=(gs, gs),
     color=color.white,  # Cor mais clara para destacar o verme
 )
 
 sky = Entity(
     model='sphere',
-    scale=500,
+    scale=900,
     double_sided=True,
     texture='sky_sunset',  # Textura de céu
     color=color.white.tint(-0.2),
@@ -63,7 +64,7 @@ sky = Entity(
 # ─── PLANO INVISÍVEL DE POSICIONAMENTO ────────────────────────────────────────
 ground_collider = Entity(
     model='plane',
-    scale=40,
+    scale=gs,
     collider='box',
     visible=False,
     y=0,
@@ -89,11 +90,11 @@ worm_light = PointLight(
 
 # ─── CÂMERA ───────────────────────────────────────────────────────────────────
 cam_pivot = Entity()
-cam_pivot.y = 10
+cam_pivot.y = 14
 
 camera.parent = cam_pivot
-camera.position = (0, 20, -50)
-camera.rotation = (20, 0, 0)
+camera.position = (0, 40, -85)
+camera.rotation = (24, 0, 0)
 
 # ─── CÉREBRO: política estocástica (8 → 16 → 5 ações) ─────────────────────────
 brain = PolicyNetwork(
@@ -345,10 +346,12 @@ def _fake_worm_at(x, z):
 def build_policy_grid():
     """Cria os pivôs (seta + cabo) da grade, uma vez."""
     n = CONFIG['grid_cells']
-    step = 32 / (n - 1)
+    span = CONFIG['map_limit'] * 1.85
+    step = span / max(1, n - 1)
+    off = span / 2
     for gx in range(n):
         for gz in range(n):
-            x, z = -16 + gx * step, -16 + gz * step
+            x, z = -off + gx * step, -off + gz * step
             pivot = Entity(position=(x, 0.4, z))
             Entity(model='cube', scale=(0.12, 0.12, 1.0), color=color.gray,
                    parent=pivot, y=0)
@@ -361,11 +364,13 @@ def build_policy_grid():
 def refresh_policy_grid():
     """Recomputa a seta e a cor de cada célula com a política atual."""
     n = CONFIG['grid_cells']
-    step = 32 / (n - 1)
+    span = CONFIG['map_limit'] * 1.85
+    step = span / max(1, n - 1)
+    off = span / 2
     for gx in range(n):
         for gz in range(n):
             pivot = policy_grid['pivots'][gx * n + gz]
-            x, z = -16 + gx * step, -16 + gz * step
+            x, z = -off + gx * step, -off + gz * step
 
             sensors = get_sensor_inputs(_fake_worm_at(x, z), env, state)
             probs = brain.probabilities(sensors)
@@ -569,7 +574,8 @@ def finish_episode():
     if CONFIG['difficulty'] > 0:
         env.randomize_obstacles(difficulty=state['difficulty'])
     worm.reset()
-    worm.head.position = Vec3(random.uniform(-8, 8), CONFIG['segment_size'] / 2, random.uniform(-8, 8))
+    lim = max(6, CONFIG['map_limit'] - 6)
+    worm.head.position = Vec3(random.uniform(-lim, lim), CONFIG['segment_size'] / 2, random.uniform(-lim, lim))
     state['episode'] = []
     state['steps_in_rain'] = 0
     state['steps_in_danger'] = 0

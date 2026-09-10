@@ -9,11 +9,12 @@ CONFIG = {
     'segment_size'     : 2.5,  # Tamanho de cada segmento (e da cabeça)
     'segment_gap'      : 2.5,  # Espaçamento entre segmentos
     'speed'            : 6.0,  # Velocidade de movimento
-    'map_limit'        : 18,   # Limite do mapa em X e Z
+    'map_limit'        : 32,   # Limite do mapa em X e Z — laboratório espaçoso
+    'ground_scale'     : 72,   # Tamanho visual do chão (deve ser >= 2*map_limit)
 
     # ── Sensores / geometria ─────────────────────────────────────────────────
-    'sensor_max_dist'  : 30.0,  # Distância de referência para normalizar sensores
-    'light_repel_dist' : 20.0,  # Alcance da repulsão pela luz (campo de potencial)
+    'sensor_max_dist'  : 55.0,  # Distância de referência para normalizar sensores (acompanha mapa maior)
+    'light_repel_dist' : 28.0,  # Alcance da repulsão pela luz (campo de potencial)
     'arrival_radius'   : 7.0,   # Raio de "chegada" na chuva / "perigo" na luz
 
     # ── Recompensa por progresso (reward shaping, por passo) ─────────────────
