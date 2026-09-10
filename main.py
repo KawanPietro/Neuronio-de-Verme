@@ -15,12 +15,15 @@ from worm import Worm
 
 app = Ursina()
 
-# ─── MODO DE EXECUÇÃO (Fase 5) ────────────────────────────────────────────────
-# python main.py --eval [--episodes=N] [--set chave=valor ...]
-#   --eval          → avaliação: professor sempre desligado, sem treino.
-#   --episodes=N    → (com --eval) roda N episódios, salva pesos e fecha.
-#   --set k=v       → sobrescreve um valor do CONFIG (tabela de experimentos).
+# ─── MODO DE EXECUÇÃO (Fase 5 + hub Verme.py) ─────────────────────────────────
+# python main.py [--eval] [--visual] [--episodes=N] [--difficulty=N] [--set k=v ...]
+#   --eval          → avaliação: professor desligado, sem treino, carrega pesos.json
+#   --visual        → visualização pura: sem treino, sem professor, sem CSV, só passeio
+#   --episodes=N    → roda N episódios e fecha (treino ou eval)
+#   --difficulty=N  → 0 LIVRE / 1 FACIL / 2 MEDIO / 3 DIFICIL  (alias para --set=difficulty)
+#   --set k=v       → sobrescreve CONFIG (tabela de experimentos)
 EVAL_MODE = '--eval' in sys.argv
+VISUAL_MODE = '--visual' in sys.argv
 EVAL_EPISODES = None
 NUM_SEEDS = 1
 for _arg in sys.argv:
@@ -28,6 +31,9 @@ for _arg in sys.argv:
         EVAL_EPISODES = int(_arg.split('=')[1])
     elif _arg.startswith('--seeds='):
         NUM_SEEDS = int(_arg.split('=')[1])
+    elif _arg.startswith('--difficulty='):
+        CONFIG['difficulty'] = int(_arg.split('=')[1])
+        print(f"  CONFIG['difficulty'] = {CONFIG['difficulty']}")
     elif _arg.startswith('--set='):
         key, value = _arg[len('--set='):].split('=', 1)
         try:
@@ -124,6 +130,11 @@ if EVAL_MODE:
         print(f"  ATENCAO: {CONFIG['weights_file']} nao existe — avaliando cerebro aleatorio")
     brain.temperature = CONFIG['min_temperature']
 
+# ─── MODO VISUALIZAÇÃO: passeio livre, sem treino nem professor ────────────
+if VISUAL_MODE:
+    brain.temperature = CONFIG['min_temperature']
+    print("  MODO VISUALIZACAO: sem treino, professor desligado, só passeio")
+
 # ─── MODO DE EDIÇÃO ───────────────────────────────────────────────────────────
 editor = {'mode': 'none'}
 
@@ -148,7 +159,7 @@ state = {
     'action_history'  : [],     # Fase 7: últimas N ações (anti-colapso)
 }
 
-if EVAL_MODE:
+if EVAL_MODE or VISUAL_MODE:
     state['force_autonomy'] = True
 
 # ─── LOG DE EPISÓDIOS (curva de aprendizado, critério de aceite da Fase 3/4) ─
@@ -474,10 +485,9 @@ def finish_episode():
     stage = current_stage()
     lam = lambda_imitation()
 
-    if EVAL_MODE:
-        # Avaliacao (--eval): professor desligado e SEM treino -- so mede.
+    if EVAL_MODE or VISUAL_MODE:
+        # Avaliacao/Visualizacao: professor desligado e SEM treino -- so mede.
         stats = episode_stats(brain, state['episode'])
-    elif stage == 'A':
         # Imitacao pura: um passo de CE por passo do episodio (acao do professor)
         for sensors, _, _, t_action in state['episode']:
             brain.imitate(sensors, t_action)
@@ -519,7 +529,7 @@ def finish_episode():
                                          gae_lambda=CONFIG['gae_lambda'],
                                          ppo_clip=CONFIG['ppo_clip'])
 
-    if not EVAL_MODE:
+    if not EVAL_MODE and not VISUAL_MODE:
         brain.learning_rate *= CONFIG['lr_decay']
         # Exploração estruturada (boltzmann): temperatura decai a cada episódio,
         # mas nunca zera — a política nunca fica 100% greedy (anti-colapso).
@@ -789,7 +799,11 @@ def input(key):
 
 
 print("\n-- Verme Neural ---------------------------------------")
-if EVAL_MODE:
+if VISUAL_MODE:
+    print("  MODO VISUALIZACAO: passeio livre, sem treino (professor desligado)")
+    if EVAL_EPISODES:
+        print(f"  Roda {EVAL_EPISODES} episodios e fecha")
+elif EVAL_MODE:
     print("  MODO AVALIACAO: professor desligado, sem treino")
     print("  carrega pesos.json (politica salva) e usa a temperatura de decisao")
     if EVAL_EPISODES:
