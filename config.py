@@ -71,7 +71,7 @@ CONFIG = {
     # ── REINFORCE episódico (Fase 3) ─────────────────────────────────────────
     'gamma'            : 0.99,  # Fator de desconto: ações perto da recompensa pesam mais
     'episode_steps'    : 200,   # H passos por episódio antes de treinar a política
-    'lr_decay'         : 0.995, # Decay do learning rate a cada episódio
+    'lr_decay'         : 0.998, # Fase 10: decay mais lento (lr estável por 500 eps)
     'reward_scale'     : 5.0,   # Escala da recompensa — Fase 7: 5x maior (sinal forte)
     'log_csv'          : 'episodios.csv',  # Curva de recompensa média por episódio
 
@@ -84,7 +84,7 @@ CONFIG = {
 
     # ── Replay Buffer (Fase 13) ──────────────────────────────────────────────
     'buffer_max_episodes'  : 50,    # quantos episódios inteiros o buffer guarda
-    'buffer_min_transitions': 200,  # buffer mínimo antes de começar a treinar do buffer
+    'buffer_min_transitions': 999999,  # Fase 10: desativa buffer para treino longo puro PPO (rapido)
     'buffer_epochs'        : 2,     # quantas vezes cada mini-batch é reutilizado (K epochs) — 2 para estabilidade pure-python
     'buffer_batch_size'    : 64,    # transições por mini-batch
 
@@ -108,8 +108,8 @@ CONFIG = {
     'rolling_window'   : 10,    # Janela da recompensa média exibida no HUD
 
     # ── Robustez e calibração (Fase 6) ───────────────────────────────────────
-    'temperature_decay': 0.995, # Fase 7: decay mais lento (exploração por mais tempo)
-    'min_temperature'  : 0.3,   # Fase 7: piso mais alto (nunca 100% greedy)
+    'temperature_decay': 0.998, # Fase 10: explora por mais tempo (500 eps)
+    'min_temperature'  : 0.2,   # Fase 10: permite exploração residual (não congela)
     'wall_margin'      : 4.0,   # Faixa perto da borda em que o professor foge da parede
 
     # ── Log ──────────────────────────────────────────────────────────────────
