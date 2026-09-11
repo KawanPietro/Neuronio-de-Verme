@@ -154,9 +154,10 @@ def compute_returns(rewards, gamma):
 class MLP:
 
     def __init__(self, n_inputs, n_hidden, n_outputs,
-                 hidden_activation='tanh', output_activation='identity'):
+                 hidden_activation='tanh', output_activation='identity', n_hidden2=None):
         self.n_inputs = n_inputs
         self.n_hidden = n_hidden
+        self.n_hidden2 = n_hidden2  # Fase 11: segunda camada oculta (ex: 16)
         self.n_outputs = n_outputs
         self.hidden_activation = hidden_activation   # 'tanh' ou 'relu'
         self.output_activation = output_activation   # 'identity' ou 'tanh'
@@ -174,16 +175,32 @@ class MLP:
             for _ in range(self.n_inputs)
         ]
         self.bias_hidden = [0.0] * self.n_hidden
+        if self.n_hidden2 is not None:
+            self.w_hidden_hidden2 = [
+                [xavier_init(self.n_hidden, self.n_hidden2) for _ in range(self.n_hidden2)]
+                for _ in range(self.n_hidden)
+            ]
+            self.bias_hidden2 = [0.0] * self.n_hidden2
+            self.w_hidden2_output = [
+                [xavier_init(self.n_hidden2, self.n_outputs) for _ in range(self.n_outputs)]
+                for _ in range(self.n_hidden2)
+            ]
+        else:
+            self.w_hidden_hidden2 = None
+            self.bias_hidden2 = None
+            self.w_hidden2_output = None
         self.w_hidden_output = [
-            [xavier_init(self.n_hidden, self.n_outputs) for _ in range(self.n_outputs)]
-            for _ in range(self.n_hidden)
-        ]
+            [xavier_init(self.n_hidden if self.n_hidden2 is None else self.n_hidden2, self.n_outputs) for _ in range(self.n_outputs)]
+            for _ in range(self.n_hidden if self.n_hidden2 is None else self.n_hidden2)
+        ] if self.n_hidden2 is None else self.w_hidden2_output
         self.bias_output = [0.0] * self.n_outputs
 
         # Ativações intermediárias guardadas no forward (para o backward)
         self.last_input = None
         self.last_pre_hidden = None
         self.last_hidden = None
+        self.last_pre_hidden2 = None
+        self.last_hidden2 = None
         self.last_pre_output = None
         self.last_output = None
 
@@ -192,7 +209,10 @@ class MLP:
     def zero_grad(self):
         self.grad_w_input_hidden = None
         self.grad_bias_hidden = None
+        self.grad_w_hidden_hidden2 = None
+        self.grad_bias_hidden2 = None
         self.grad_w_hidden_output = None
+        self.grad_w_hidden2_output = None
         self.grad_bias_output = None
         self.grad_acc = None
 
@@ -229,12 +249,26 @@ class MLP:
             self.last_pre_hidden.append(s)
             self.last_hidden.append(self._act(s))
 
+        if self.n_hidden2 is not None:
+            self.last_pre_hidden2 = []
+            self.last_hidden2 = []
+            for j2 in range(self.n_hidden2):
+                s = self.bias_hidden2[j2]
+                for j in range(self.n_hidden):
+                    s += self.last_hidden[j] * self.w_hidden_hidden2[j][j2]
+                self.last_pre_hidden2.append(s)
+                self.last_hidden2.append(self._act(s))
+            h2, n_h2 = self.last_hidden2, self.n_hidden2
+        else:
+            h2, n_h2 = self.last_hidden, self.n_hidden
+
         self.last_pre_output = []
         self.last_output = []
         for k in range(self.n_outputs):
             s = self.bias_output[k]
-            for j in range(self.n_hidden):
-                s += self.last_hidden[j] * self.w_hidden_output[j][k]
+            for j in range(n_h2):
+                w = self.w_hidden2_output[j][k] if self.n_hidden2 is not None else self.w_hidden_output[j][k]
+                s += h2[j] * w
             self.last_pre_output.append(s)
             self.last_output.append(self._out(s))
 
@@ -245,14 +279,41 @@ class MLP:
     def backward_from_output_grad(self, grad_output):
         """
         Propaga dL/dz (gradiente em relação aos logits/saídas pré-ativação).
-
-        Camada a camada:
-          camada 2: dL/dW2[j][k] = dL/dz2[k] · h[j] ;  dL/db2[k] = dL/dz2[k]
-          oculta:   dL/dh[j] = Σ_k dL/dz2[k] · W2[j][k]
-          camada 1: dL/dz1[j] = dL/dh[j] · act'(z1[j])
-                    dL/dW1[i][j] = dL/dz1[j] · x[i] ;  dL/db1[j] = dL/dz1[j]
+        Suporta 2 ou 3 camadas (n_hidden2).
         """
-        # Camada saída (oculta → saída)
+        if self.n_hidden2 is not None:
+            # ── Saída: h2 → out
+            self.grad_w_hidden2_output = [[0.0] * self.n_outputs for _ in range(self.n_hidden2)]
+            self.grad_w_hidden_output = self.grad_w_hidden2_output
+            self.grad_bias_output = [0.0] * self.n_outputs
+            grad_hidden2 = [0.0] * self.n_hidden2
+            for k in range(self.n_outputs):
+                gk = grad_output[k]
+                self.grad_bias_output[k] = gk
+                for j in range(self.n_hidden2):
+                    self.grad_w_hidden2_output[j][k] = gk * self.last_hidden2[j]
+                    grad_hidden2[j] += gk * self.w_hidden2_output[j][k]
+            # ── Oculta 2: h1 → h2
+            self.grad_w_hidden_hidden2 = [[0.0] * self.n_hidden2 for _ in range(self.n_hidden)]
+            self.grad_bias_hidden2 = [0.0] * self.n_hidden2
+            grad_hidden = [0.0] * self.n_hidden
+            for j2 in range(self.n_hidden2):
+                local2 = grad_hidden2[j2] * self._act_deriv(self.last_pre_hidden2[j2], self.last_hidden2[j2])
+                self.grad_bias_hidden2[j2] = local2
+                for j in range(self.n_hidden):
+                    self.grad_w_hidden_hidden2[j][j2] = local2 * self.last_hidden[j]
+                    grad_hidden[j] += local2 * self.w_hidden_hidden2[j][j2]
+            # ── Oculta 1: in → h1
+            self.grad_w_input_hidden = [[0.0] * self.n_hidden for _ in range(self.n_inputs)]
+            self.grad_bias_hidden = [0.0] * self.n_hidden
+            for j in range(self.n_hidden):
+                local = grad_hidden[j] * self._act_deriv(self.last_pre_hidden[j], self.last_hidden[j])
+                self.grad_bias_hidden[j] = local
+                for i in range(self.n_inputs):
+                    self.grad_w_input_hidden[i][j] = local * self.last_input[i]
+            return
+
+        # ── 2 camadas: saída (oculta → saída)
         self.grad_w_hidden_output = [[0.0] * self.n_outputs for _ in range(self.n_hidden)]
         self.grad_bias_output = [0.0] * self.n_outputs
         grad_hidden = [0.0] * self.n_hidden
@@ -275,25 +336,46 @@ class MLP:
     # ── Parâmetros ───────────────────────────────────────────────────────────
 
     def params(self):
-        return {
+        d = {
             'w_input_hidden' : self.w_input_hidden,
             'bias_hidden'    : self.bias_hidden,
             'w_hidden_output': self.w_hidden_output,
             'bias_output'    : self.bias_output,
+            'n_hidden2'      : self.n_hidden2,
         }
+        if self.n_hidden2 is not None:
+            d['w_hidden_hidden2'] = self.w_hidden_hidden2
+            d['bias_hidden2'] = self.bias_hidden2
+            d['w_hidden2_output'] = self.w_hidden2_output
+        return d
 
     def grads(self):
-        return {
+        d = {
             'w_input_hidden' : self.grad_w_input_hidden,
             'bias_hidden'    : self.grad_bias_hidden,
             'w_hidden_output': self.grad_w_hidden_output,
             'bias_output'    : self.grad_bias_output,
         }
+        if self.n_hidden2 is not None:
+            d['w_hidden_hidden2'] = self.grad_w_hidden_hidden2
+            d['bias_hidden2'] = self.grad_bias_hidden2
+            d['w_hidden2_output'] = self.grad_w_hidden2_output
+        return d
 
     def set_params(self, params):
         self.w_input_hidden  = params['w_input_hidden']
         self.bias_hidden     = params['bias_hidden']
-        self.w_hidden_output = params['w_hidden_output']
+        # Compatibilidade: pesos antigos sem n_hidden2
+        if 'n_hidden2' in params and params['n_hidden2'] is not None:
+            self.n_hidden2 = params['n_hidden2']
+            self.w_hidden_hidden2 = params['w_hidden_hidden2']
+            self.bias_hidden2 = params['bias_hidden2']
+            self.w_hidden2_output = params['w_hidden2_output']
+            self.w_hidden_output = self.w_hidden2_output
+        else:
+            # Mantém arquitetura atual se pesos antigos
+            if 'w_hidden_output' in params:
+                self.w_hidden_output = params['w_hidden_output']
         self.bias_output     = params['bias_output']
 
     # ── Memória (Fase 5): salvar/carregar o cérebro em JSON ──────────────────
@@ -309,7 +391,7 @@ class MLP:
             self.set_params(json.load(f))
 
     def apply_gradients(self, learning_rate, regularization=0.0):
-        """θ ← θ + lr·∇ − lr·λ·θ (decay L2)."""
+        """θ ← θ + lr·∇ − lr·λ·θ (decay L2). Suporta 2 ou 3 camadas."""
         for i in range(self.n_inputs):
             for j in range(self.n_hidden):
                 self.w_input_hidden[i][j] += (
@@ -318,12 +400,29 @@ class MLP:
                 )
         for j in range(self.n_hidden):
             self.bias_hidden[j] += learning_rate * self.grad_bias_hidden[j]
-        for j in range(self.n_hidden):
-            for k in range(self.n_outputs):
-                self.w_hidden_output[j][k] += (
-                    learning_rate * self.grad_w_hidden_output[j][k]
-                    - learning_rate * regularization * self.w_hidden_output[j][k]
-                )
+        if self.n_hidden2 is not None:
+            for j in range(self.n_hidden):
+                for j2 in range(self.n_hidden2):
+                    self.w_hidden_hidden2[j][j2] += (
+                        learning_rate * self.grad_w_hidden_hidden2[j][j2]
+                        - learning_rate * regularization * self.w_hidden_hidden2[j][j2]
+                    )
+            for j2 in range(self.n_hidden2):
+                self.bias_hidden2[j2] += learning_rate * self.grad_bias_hidden2[j2]
+            for j2 in range(self.n_hidden2):
+                for k in range(self.n_outputs):
+                    self.w_hidden2_output[j2][k] += (
+                        learning_rate * self.grad_w_hidden2_output[j2][k]
+                        - learning_rate * regularization * self.w_hidden2_output[j2][k]
+                    )
+            self.w_hidden_output = self.w_hidden2_output
+        else:
+            for j in range(self.n_hidden):
+                for k in range(self.n_outputs):
+                    self.w_hidden_output[j][k] += (
+                        learning_rate * self.grad_w_hidden_output[j][k]
+                        - learning_rate * regularization * self.w_hidden_output[j][k]
+                    )
         for k in range(self.n_outputs):
             self.bias_output[k] += learning_rate * self.grad_bias_output[k]
 
@@ -358,12 +457,29 @@ class MLP:
                 )
         for j in range(self.n_hidden):
             self.bias_hidden[j] += learning_rate * acc['bias_hidden'][j]
-        for j in range(self.n_hidden):
-            for k in range(self.n_outputs):
-                self.w_hidden_output[j][k] += (
-                    learning_rate * acc['w_hidden_output'][j][k]
-                    - learning_rate * regularization * self.w_hidden_output[j][k]
-                )
+        if self.n_hidden2 is not None and 'w_hidden_hidden2' in acc:
+            for j in range(self.n_hidden):
+                for j2 in range(self.n_hidden2):
+                    self.w_hidden_hidden2[j][j2] += (
+                        learning_rate * acc['w_hidden_hidden2'][j][j2]
+                        - learning_rate * regularization * self.w_hidden_hidden2[j][j2]
+                    )
+            for j2 in range(self.n_hidden2):
+                self.bias_hidden2[j2] += learning_rate * acc['bias_hidden2'][j2]
+            for j2 in range(self.n_hidden2):
+                for k in range(self.n_outputs):
+                    self.w_hidden2_output[j2][k] += (
+                        learning_rate * acc['w_hidden2_output'][j2][k]
+                        - learning_rate * regularization * self.w_hidden2_output[j2][k]
+                    )
+            self.w_hidden_output = self.w_hidden2_output
+        else:
+            for j in range(self.n_hidden):
+                for k in range(self.n_outputs):
+                    self.w_hidden_output[j][k] += (
+                        learning_rate * acc['w_hidden_output'][j][k]
+                        - learning_rate * regularization * self.w_hidden_output[j][k]
+                    )
         for k in range(self.n_outputs):
             self.bias_output[k] += learning_rate * acc['bias_output'][k]
         self.grad_acc = None
@@ -381,15 +497,24 @@ def save_brain(path, actor, critic=None):
 
 
 def load_brain(path, actor, critic=None):
-    """Carrega actor (e opcionalmente critic) de um JSON. Ignora pesos incompatíveis (ex: 8 vs 11 inputs)."""
+    """Carrega actor (e opcionalmente critic) de um JSON. Ignora pesos incompatíveis (ex: 8 vs 11 inputs, 16 vs 32 hidden)."""
     try:
         with open(path) as f:
             data = json.load(f)
         actor_data = data['actor'] if 'actor' in data else data
-        # Verifica compatibilidade de dimensão (n_inputs)
+        # Verifica compatibilidade de dimensão (n_inputs / arquitetura)
         w = actor_data.get('w_input_hidden', [])
         if w and len(w) != actor.n_inputs:
             print(f"  AVISO: pesos ignorados — n_inputs salvo={len(w)} vs esperado={actor.n_inputs} (treino novo necessário)")
+            return False
+        if w and w[0] and len(w[0]) != actor.n_hidden:
+            print(f"  AVISO: pesos ignorados — n_hidden salvo={len(w[0])} vs esperado={actor.n_hidden}")
+            return False
+        if actor.n_hidden2 is not None and actor_data.get('n_hidden2') is None:
+            print(f"  AVISO: pesos ignorados — arquitetura 2 camadas vs esperado 3 camadas (n_hidden2={actor.n_hidden2})")
+            return False
+        if actor.n_hidden2 is None and actor_data.get('n_hidden2') is not None:
+            print(f"  AVISO: pesos ignorados — arquitetura 3 camadas vs esperado 2 camadas")
             return False
         if 'actor' in data:
             actor.set_params(data['actor'])
@@ -422,8 +547,10 @@ ACTIONS = ['esquerda', 'frente_esquerda', 'frente', 'frente_direita', 'direita']
 
 class CriticNetwork(MLP):
 
-    def __init__(self, n_inputs, n_hidden=16):
-        super().__init__(n_inputs, n_hidden, 1, 'tanh', 'identity')
+    def __init__(self, n_inputs, n_hidden=16, n_hidden2=None):
+        if n_hidden2 is None:
+            n_hidden2 = CONFIG.get('n_hidden2', None)
+        super().__init__(n_inputs, n_hidden, 1, 'tanh', 'identity', n_hidden2=n_hidden2)
         self.learning_rate = CONFIG['learning_rate']
 
     def value(self, inputs):
@@ -463,8 +590,10 @@ def compute_gae(rewards, values, gamma, gae_lambda):
 class PolicyNetwork(MLP):
 
     def __init__(self, n_inputs, n_hidden, n_actions,
-                 hidden_activation='tanh', temperature=1.0):
-        super().__init__(n_inputs, n_hidden, n_actions, hidden_activation, 'identity')
+                 hidden_activation='tanh', temperature=1.0, n_hidden2=None):
+        if n_hidden2 is None:
+            n_hidden2 = CONFIG.get('n_hidden2', None)
+        super().__init__(n_inputs, n_hidden, n_actions, hidden_activation, 'identity', n_hidden2=n_hidden2)
         self.n_actions = n_actions
         self.temperature = temperature
         self.learning_rate = CONFIG['learning_rate']  # α, com decay por episódio

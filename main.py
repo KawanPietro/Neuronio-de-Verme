@@ -102,18 +102,20 @@ camera.parent = cam_pivot
 camera.position = (0, 40, -85)
 camera.rotation = (24, 0, 0)
 
-# ─── CÉREBRO: política estocástica (8 → 16 → 5 ações) ─────────────────────────
+# ─── CÉREBRO: política estocástica (11 → 32 → 16 → 5 ações) ────────────────
 brain = PolicyNetwork(
     CONFIG['n_inputs'],
     CONFIG['n_hidden'],
     CONFIG['n_actions'],
     temperature=CONFIG['temperature'],
+    n_hidden2=CONFIG.get('n_hidden2'),
 )
 
-# ─── CRÍTICO (Fase 8 — A2C): V(s) 8 → 16 → 1 ──────────────────────────────
+# ─── CRÍTICO (Fase 8 — A2C): V(s) 11 → 32 → 16 → 1 ────────────────────────
 critic = CriticNetwork(
     CONFIG['n_inputs'],
     CONFIG['n_hidden'],
+    n_hidden2=CONFIG.get('n_hidden2'),
 )
 
 # ─── REPLAY BUFFER (Fase 13) ────────────────────────────────────────────────

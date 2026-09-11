@@ -56,7 +56,8 @@ CONFIG = {
 
     # ── Cérebro ──────────────────────────────────────────────────────────────
     'n_inputs'         : 11,    # Features do estado: 8 (luz/chuva) + 3 (obstáculo)
-    'n_hidden'         : 16,    # Neurônios da camada oculta
+    'n_hidden'         : 32,    # Fase 11: primeira camada oculta (era 16)
+    'n_hidden2'        : 16,    # Fase 11: segunda camada oculta — arquitetura 11→32→16→5
     'n_outputs'        : 3,     # Saídas contínuas (usado pela Rede_Neural legada)
     'n_actions'        : 5,     # Ações discretas da política (Fase 2)
     'learning_rate'    : 0.05,  # Taxa de aprendizado (alpha) — Fase 7: 5x maior
