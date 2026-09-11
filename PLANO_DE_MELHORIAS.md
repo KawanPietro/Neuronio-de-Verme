@@ -25,7 +25,7 @@
 | 8 | Actor-Critic (A2C) | Critic V(s) + GAE advantage | M | ✅ concluída |
 | 9 | PPO | Clipped surrogate objective | M | ✅ concluída |
 | 10 | Treino longo | 500+ episódios com PPO + semente fixa | S | ✅ parcial (100 eps → 15%, 253/500 colapso) |
-| 11 | Expansão de rede | Arquitetura maior (8→32→16→5) | M | ⏳ pendente |
+| 11 | Expansão de rede | Arquitetura maior (11→32→16→5, 1.7k) | M | ✅ parcial (100 eps → 0%, precisa mais dados) |
 | 12 | Espaço de estado expandido | Features adicionais (velocidade, histórico, ângulo) | M | ⏳ pendente |
 | 13 | Replay Buffer (off-policy) | Reutilizar dados de episódios passados | L | ✅ concluída (código) — ver nota |
 | 14 | Avaliação e_DoD | Validar ≥80% em 100+ eps com multi-seed | M | ⏳ pendente |
@@ -195,14 +195,15 @@ python -m py_compile config.py mlp.py main.py perception.py worm.py environment.
 **Hipótese:** com 3 camadas (8→32→16→5) e ~1.700 parâmetros, a rede pode capturar relações não-lineares mais sutis entre sensores e ações.
 
 **Tarefas:**
-- [ ] Adicionar camada intermediária ao MLP (8→32→16→5)
-- [ ] Adaptar `forward/backward` para 3 camadas
-- [ ] Atualizar `PolicyNetwork` e `CriticNetwork` (8→32→16→1)
-- [ ] Testar com `test_mlp.py` (gradientes OK?)
-- [ ] Treinar 500 eps com rede nova + multi-seed
-- [ ] Comparar com rede de 2 camadas (Fase 10)
+- [x] Adicionar camada intermediária ao MLP (11→32→16→5) — `mlp.py` 3 camadas, numeric grad 1e-7
+- [x] Adaptar `forward/backward` para 3 camadas + `n_hidden2` em Policy/Critic
+- [x] Atualizar `PolicyNetwork` e `CriticNetwork` (11→32→16→1)
+- [x] Testar com `test_mlp.py` (15/15 OK) + deep forward/backward
+- [x] Treinar 100 eps com rede nova (dif 1, 11→32→16→5) — 0% (colapso esquerda 200)
+- [ ] Treinar 500 eps com rede nova + multi-seed — rede maior precisa 2-3× mais dados
+- [ ] Comparar com rede de 2 camadas (Fase 10: 15% shallow vs 0% deep em 100 eps)
 
-**Métrica de sucesso:** ≥55% (+5pp sobre Fase 10).
+**Resultado:** rede profunda (+13% params → 1.7k) não evita colapso com poucos dados; precisa Fase 12 (estado 16) + treino 500+.
 
 ---
 
