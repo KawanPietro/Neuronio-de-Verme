@@ -47,9 +47,10 @@ class Environment:
             position=Vec3(pos.x, scale * 0.45, pos.z),
             collider='box',
         )
-        # Detalhe visual: borda mais escura para destacar
-        Entity(model='cube', color=color.black33, scale=(scale*1.02, 0.12, scale*1.02),
-               position=Vec3(pos.x, 0.06, pos.z))
+        # Sombra/borda como filho — é destruída junto com o pai
+        Entity(parent=obs, model='cube', color=color.black33,
+               scale=(1.02, 0.12 / (scale * 0.9), 1.02),
+               position=(0, -0.44, 0))
         self.obstacles.append(obs)
         return obs
 
