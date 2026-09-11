@@ -34,7 +34,17 @@ def menu():
     print("  [4] DIFICULDADE   — escolher nivel de obstaculos")
     print("  [5] INFO          — ver fases e controles")
     print("  [0] SAIR")
-    return input("  Escolha [0-5]: ").strip()
+    try:
+        raw = input("  Escolha [0-5]: ")
+    except EOFError:
+        print("\n  [sem entrada — iniciando VISUALIZACAO direto]")
+        return "3"
+    raw = raw.strip()
+    # Se o terminal colou o caminho do arquivo (ex: :/Users/.../Verme.py") ignora
+    if ".py" in raw or ":/" in raw or ":\\" in raw:
+        print(f"  (ignorado input invalido: {raw!r})")
+        return ""
+    return raw
 
 def ask_difficulty():
     print("\n--- DIFICULDADE ---")
@@ -107,10 +117,19 @@ def info():
 
 def main_loop():
     difficulty = CONFIG['difficulty']
+    fails = 0
     while True:
         banner()
         print(f"  Ultima dificuldade escolhida: {difficulty} ({LVL[difficulty]['label']})")
+        print("  Dica: digite 1-5 e ENTER. Ou rode direto: python Verme.py --visual")
         ch = menu()
+        if ch == "":
+            fails += 1
+            if fails >= 3:
+                print("  Muitas entradas invalidas — iniciando VISUALIZACAO (dificuldade 1)")
+                run_main(["--visual", f"--difficulty={difficulty}"])
+            continue
+        fails = 0
         if ch == "1":
             d = ask_difficulty()
             if d is not None:
