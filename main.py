@@ -449,6 +449,26 @@ def update_hud():
     )
 
 
+def update_hud_aquarium(action):
+    """HUD do aquário: só observação, sem contagem de época."""
+    lvl = CONFIG['difficulty_levels'].get(state['difficulty'], CONFIG['difficulty_levels'][1])
+    ent = entropy(brain.last_probs) if brain.last_probs else 0.0
+    # Ação mais provável
+    probs = brain.last_probs
+    top = max(range(len(probs)), key=lambda a: probs[a]) if probs else action
+    hud.text = (
+        f"AQUARIO — observacao pura\n"
+        f"nivel    : {lvl['label']} ({state['difficulty']})  obs:{len(env.obstacles)}\n"
+        f"acao     : {ACTIONS[action]} (top {ACTIONS[top]} {max(probs)*100:.0f}%)\n"
+        f"entropia : {ent:.3f}  temp:{brain.temperature:.2f}\n"
+        f"pos      : x{worm.head.x:+.1f} z{worm.head.z:+.1f}\n"
+        f"chuva    : {(_nearest_dist(worm.head.position, env.rain_sources) or 0):.1f}  "
+        f"luz:{(_nearest_dist(worm.head.position, env.light_sources) or 0):.1f}  "
+        f"obs:{(_nearest_dist(worm.head.position, env.obstacles) or 99):.1f}\n"
+        f"O=cicla nivel  P=grade  R=reset  ESC=sair"
+    )
+
+
 # ─── REINICIAR ────────────────────────────────────────────────────────────────
 def reset():
     """Reinicia o verme e o cérebro sem fechar o programa."""
@@ -662,6 +682,16 @@ def update():
     if new_dir.length() > 0.01:
         worm.direction = new_dir.normalized()
     worm.step(time.dt, env)
+
+    # ── AQUÁRIO (visualização pura): sem coleta de episódio/loops ──────────
+    if VISUAL_MODE:
+        # Só log/HUD de passeio — não conta época, não treina, não reseta cena
+        state['log_timer'] += time.dt
+        if state['log_timer'] >= CONFIG['log_interval']:
+            state['log_timer'] = 0.0
+            print(f"aquario  acao={ACTIONS[action]:>14}  chuva_dist={_nearest_dist(worm.head.position, env.rain_sources) or 0:.1f}")
+        update_hud_aquarium(action)
+        return
 
     # ── Recompensa por passo e coleta do episódio (Fases 3/4) ─────────────────
     reward = calculate_reward(worm, env, state)
