@@ -34,8 +34,10 @@ python main.py --eval --episodes=50 --set=learning_rate=0.005 --set=gamma=0.95
 | 5 | 2026-08 | 1–5 | 0.05 | 0.99 | 0.001 | 1.0→0.3 (decay 0.995) | 200 | A10/B20/C70 | **40% (8/20 C)** seed 2 | 25% (5/20 C) | — | **PPO** (clip=0.2): seed 2 melhor. Eval 100 eps = **40%** (28/70 C). PPO ≈ A2C, ambos 2x REINFORCE. |
 | 6 | 2026-08 | 1–5 | 0.05 | 0.99 | 0.001 | 1.0→0.3 (decay 0.995) | 200 | A10/B20/C70 | 25-35% (bug) | — | — | **Replay Buffer** (pré-fix): ratio=1.0, critic=advantage → clipping inoperante; overflow no ep.34. |
 | 7 | 2026-08 | 3 | 0.05 | 0.99 | 0.001 | 1.0→0.3 (decay 0.995) | 200 | A10/B20/C70 | — | — | — | **Replay Buffer pós-fix**: 15/15 testes OK, 4.3s/ep (7× mais caro). 200 eps ≈14 min/seed. Pendente multi-seed completo (nightly). |
+| 8 | 2026-08 | 42 | 0.05 | 0.99 | 0.001 | 1.0→0.2 (decay 0.998) | 200 | A10/B20/C70 | 15% (3/20 C) | 30% (6/20 C) | — | **Fase 10 treino longo** (100 eps, dif 1, decay 0.998): colapsou p/ `direita` 200/200, entropia 0.000. Mesmo com 500 eps (253 eps parcial) colapso persiste. Obstáculos dificultam — sem Fase 11/12 não há ganho. |
+| 9 | 2026-08 | — | 0.05 | 0.99 | 0.001 | 1.0→0.2 (decay 0.998) | 200 | A10/B20/C70 | — | — | — | Laboratorio 32×32 (72x72 ground), obstáculos com muros Fase 15+, Aquario --visual separado. |
 
-**Diagnóstico final:** REINFORCE puro com softmax colapsa quando UMA ação gera reward positiva. A2C/PPO dobram estabilidade (20%→40%) mas estagnam por **dados insuficientes** (20k passos vs 1M+ necessário) e **rede pequena** (229 params). Replay buffer arquiteturalmente corrige eficiência de dados mas é caro em pure-python (≈14 min/200 eps). Próximo retorno: **DoD 80% requer treino longo (Fase 10) + buffer ou rede/estado maiores**.
+**Diagnóstico final:** REINFORCE puro com softmax colapsa. A2C/PPO dobram (20%→40%) mas **Fase 10 (decay 0.998, 500 eps) não resolve colapso** — política ainda converge p/ 1 ação (direita) com 4 pedras. Obstáculos + mapa maior aumentam dificuldade. Requer **Fase 11 (rede maior) + 12 (estado 16-dim)** para representar desvio.
 
 > Instruções: após rodar um treino, preencha uma linha com a média de
 > `chegada_chuva`/`perigo_luz` e a recompensa média dos episódios finais.

@@ -24,7 +24,7 @@
 | 7 | Engenharia de recompensa | Sinais fortes, anti-colapso, multi-seed | M | ✅ concluída |
 | 8 | Actor-Critic (A2C) | Critic V(s) + GAE advantage | M | ✅ concluída |
 | 9 | PPO | Clipped surrogate objective | M | ✅ concluída |
-| 10 | Treino longo | 500+ episódios com PPO + semente fixa | S | ⏳ pendente |
+| 10 | Treino longo | 500+ episódios com PPO + semente fixa | S | ✅ parcial (100 eps → 15%, 253/500 colapso) |
 | 11 | Expansão de rede | Arquitetura maior (8→32→16→5) | M | ⏳ pendente |
 | 12 | Espaço de estado expandido | Features adicionais (velocidade, histórico, ângulo) | M | ⏳ pendente |
 | 13 | Replay Buffer (off-policy) | Reutilizar dados de episódios passados | L | ✅ concluída (código) — ver nota |
