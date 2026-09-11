@@ -38,18 +38,21 @@ CONFIG = {
     'action_repeat_penalty' : 0.1,
     'action_repeat_window'  : 20,
 
-    # ── Obstáculos e níveis de dificuldade (Fase 15) ───────────────────────
+    # ── Obstáculos e níveis de dificuldade (Fase 15+) ──────────────────────
     'difficulty'       : 1,     # 0=sem obstáculos, 1=fácil, 2=médio, 3=difícil
     'difficulty_levels': {
-        0: {'n_obstacles': 0, 'obstacle_scale': 0.0, 'label': 'LIVRE'},
-        1: {'n_obstacles': 3, 'obstacle_scale': 1.8, 'label': 'FACIL'},
-        2: {'n_obstacles': 5, 'obstacle_scale': 2.2, 'label': 'MEDIO'},
-        3: {'n_obstacles': 7, 'obstacle_scale': 2.6, 'label': 'DIFICIL'},
+        0: {'n_obstacles': 0, 'n_walls': 0, 'obstacle_scale': 0.0, 'label': 'LIVRE'},
+        1: {'n_obstacles': 4, 'n_walls': 0, 'obstacle_scale': 1.8, 'label': 'FACIL'},
+        2: {'n_obstacles': 4, 'n_walls': 2, 'obstacle_scale': 2.2, 'label': 'MEDIO'},
+        3: {'n_obstacles': 5, 'n_walls': 3, 'obstacle_scale': 2.8, 'label': 'DIFICIL'},
     },
     'obstacle_radius'      : 2.5,   # Raio de colisão (distância que conta como batida)
     'obstacle_penalty'     : 3.0,   # Penalidade ao colidir/entrar no raio do obstáculo
     'obstacle_proximity_penalty': 0.2,  # Penalidade por estar perto (1/dist)
-    'obstacle_avoid_reward': 0.15,  # Recompensa por se afastar do obstáculo (Δdist)
+    'obstacle_avoid_reward': 0.18,  # Recompensa por se afastar do obstáculo (Δdist) — um pouco maior
+    'wall_length'          : 9.0,   # Comprimento dos muros (níveis 2-3)
+    'wall_thickness'       : 1.4,   # Espessura dos muros
+    'auto_difficulty'      : False, # Se True, sobe de nível a cada 80 episódios
 
     # ── Cérebro ──────────────────────────────────────────────────────────────
     'n_inputs'         : 11,    # Features do estado: 8 (luz/chuva) + 3 (obstáculo)

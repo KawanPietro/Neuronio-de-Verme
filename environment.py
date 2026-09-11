@@ -40,17 +40,36 @@ class Environment:
     def place_obstacle(self, pos, scale=2.0):
         """Cria um obstáculo sólido (pedra) — Fase 15."""
         from config import CONFIG
+        # Variação de tamanho/cor para não ficar monótono
+        jitter = random.uniform(0.85, 1.15)
+        s = scale * jitter
         obs = Entity(
             model='cube',
-            color=color.gray.tint(-0.15),
-            scale=(scale, scale * 0.9, scale),
-            position=Vec3(pos.x, scale * 0.45, pos.z),
+            color=color.gray.tint(random.uniform(-0.2, -0.05)),
+            scale=(s, s * 0.9, s),
+            position=Vec3(pos.x, s * 0.45, pos.z),
             collider='box',
         )
         # Sombra/borda como filho — é destruída junto com o pai
         Entity(parent=obs, model='cube', color=color.black33,
-               scale=(1.02, 0.12 / (scale * 0.9), 1.02),
+               scale=(1.02, 0.12 / (s * 0.9), 1.02),
                position=(0, -0.44, 0))
+        self.obstacles.append(obs)
+        return obs
+
+    def place_wall(self, pos, length=9.0, thickness=1.4, angle=0):
+        """Muro comprido que força contorno — níveis 2-3."""
+        obs = Entity(
+            model='cube',
+            color=color.dark_gray.tint(-0.1),
+            scale=(length, 2.0, thickness),
+            position=Vec3(pos.x, 1.0, pos.z),
+            rotation_y=angle,
+            collider='box',
+        )
+        # Sombra do muro
+        Entity(parent=obs, model='cube', color=color.black33,
+               scale=(1.02, 0.06, 1.02), position=(0, -0.47, 0))
         self.obstacles.append(obs)
         return obs
 
@@ -88,16 +107,17 @@ class Environment:
             self.place_rain(Vec3(random.uniform(-limit, limit), 1, random.uniform(-limit, limit)))
 
     def randomize_obstacles(self, difficulty=1):
-        """Gera obstáculos conforme o nível de dificuldade — Fase 15."""
+        """Gera obstáculos conforme o nível de dificuldade — Fase 15+."""
         from config import CONFIG
         self.clear_obstacles()
         lvl = CONFIG['difficulty_levels'].get(difficulty, CONFIG['difficulty_levels'][1])
         n = lvl['n_obstacles']
+        n_walls = lvl.get('n_walls', 0)
         scale = lvl['obstacle_scale']
         lim = CONFIG['map_limit'] - 2
-        # Reserva centro livre e evita sobrepor luz/chuva
+        # ── Pedras espalhadas ──────────────────────────────────────────────
         for _ in range(n):
-            for _ in range(12):  # tenta até 12 vezes achar posição válida
+            for _ in range(14):
                 x = random.uniform(-lim, lim)
                 z = random.uniform(-lim, lim)
                 if abs(x) < 3 and abs(z) < 3:
@@ -107,9 +127,36 @@ class Environment:
                     if abs(src.x - x) < 3.5 and abs(src.z - z) < 3.5:
                         ok = False
                         break
+                # Evita pedras muito coladas entre si
+                for obs in self.obstacles:
+                    if abs(obs.x - x) < 3.0 and abs(obs.z - z) < 3.0:
+                        ok = False
+                        break
                 if not ok:
                     continue
                 self.place_obstacle(Vec3(x, 0, z), scale=scale)
+                break
+        # ── Muros (níveis 2-3) — criam gargalos que exigem planejar rota ──
+        wall_len = CONFIG.get('wall_length', 9.0)
+        wall_thick = CONFIG.get('wall_thickness', 1.4)
+        for i in range(n_walls):
+            for _ in range(14):
+                x = random.uniform(-lim+4, lim-4)
+                z = random.uniform(-lim+4, lim-4)
+                if abs(x) < 4 and abs(z) < 4:
+                    continue
+                angle = random.choice([0, 90, 0, 90, 45, -45])
+                # Não bloqueia completamente o centro: deixa corredor
+                if abs(x) < 7 and abs(z) < 7 and angle in (0, 90):
+                    continue
+                ok = True
+                for src in self.light_sources + self.rain_sources:
+                    if abs(src.x - x) < 4.5 and abs(src.z - z) < 4.5:
+                        ok = False
+                        break
+                if not ok:
+                    continue
+                self.place_wall(Vec3(x, 0, z), length=wall_len, thickness=wall_thick, angle=angle)
                 break
 
     def rebuild_rain_particles(self):
