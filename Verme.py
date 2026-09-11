@@ -63,13 +63,25 @@ def ask_int(msg, default=None):
         return default
 
 def run_main(args):
-    cmd = [sys.executable, "main.py"] + args
-    print(f"\n> {' '.join(cmd)}")
+    base = os.path.dirname(os.path.abspath(__file__))
+    main_py = os.path.join(base, "main.py")
+    if not os.path.exists(main_py):
+        print(f"  ERRO: nao achei {main_py}")
+        return
+    cmd = [sys.executable, main_py] + args
+    print(f"\n> {' '.join(cmd)}  (cwd={base})")
     # Usa o mesmo Python/venv que rodou Verme.py
     try:
-        subprocess.run(cmd)
+        result = subprocess.run(cmd, cwd=base)
+        if result.returncode != 0:
+            print(f"  [!] main.py saiu com codigo {result.returncode}")
+            print("  Dica: rode direto no terminal para ver o erro:")
+            print(f"    python main.py {' '.join(args)}")
     except KeyboardInterrupt:
         print("\n  Interrompido.")
+    except Exception as e:
+        print(f"  ERRO ao iniciar main.py: {e}")
+        print("  Tente rodar direto: python main.py " + " ".join(args))
     print("\n  [Voltando ao HUB Verme.py — pressione ENTER]")
     try:
         input()
@@ -140,10 +152,17 @@ def main_loop():
             print("  Opcao invalida.")
 
 if __name__ == "__main__":
+    # Garante que rodar por duplo-clique (cwd diferente) ainda acha os modulos
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
     # Se chamado com args, repassa direto para main.py (compat: python Verme.py --eval ...)
     if len(sys.argv) > 1:
         # Ex: python Verme.py --eval --episodes=20  -> python main.py --eval --episodes=20
         print(f"Verme.py repassando args para main.py: {sys.argv[1:]}")
         run_main(sys.argv[1:])
         sys.exit(0)
-    main_loop()
+    try:
+        main_loop()
+    except Exception as e:
+        print(f"\n[ERRO no HUB] {e}")
+        import traceback; traceback.print_exc()
+        input("Pressione ENTER para sair...")
