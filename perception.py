@@ -27,10 +27,12 @@ def _xz_unit(to_vec):
     return 0.0, 0.0
 
 
-# ─── ESTADO (SENSORES 11-DIM) ─────────────────────────────────────────────────
+# ─── ESTADO (SENSORES 17-DIM, Fase 12) ──────────────────────────────────────────
 #
-# O verme "vê" geometria + obstáculos. Isso dá à rede a informação de
-# EM QUE DIREÇÃO ir e O QUE desviar — sem isso, navegar com barreiras é impossível.
+# O verme "vê" geometria + obstáculos + propriocepção. Isso dá à rede a
+# informação de EM QUE DIREÇÃO ir, O QUE desviar e PARA ONDE ESTÁ INDO —
+# sem isso, navegar com barreiras é impossível (o verme não sabia "para onde
+# estava indo", só "para onde está a chuva").
 #
 #   índice | feature       | significado
 #   -------+---------------+--------------------------------------------
@@ -45,16 +47,42 @@ def _xz_unit(to_vec):
 #   8      | obs_dir.x     | vetor XZ unitário até o obstáculo mais próximo
 #   9      | obs_dir.z     | (0, 0) se não houver obstáculo
 #  10      | obs_dist      | distância normalizada [0,1] até esse obstáculo
+#  11      | vel_x         | direção atual X (propriocepção, [-1,1])
+#  12      | vel_z         | direção atual Z (propriocepção, [-1,1])
+#  13      | borda_x       | distância à borda X normalizada [0,1] (1=centro, 0=borda)
+#  14      | borda_z       | distância à borda Z normalizada [0,1] (1=centro, 0=borda)
+#  15      | angulo_luz    | ângulo relativo direção->luz / pi, em [-1,1] (0=alinhado)
+#  16      | angulo_chuva  | ângulo relativo direção->chuva / pi, em [-1,1] (0=alinhado)
+
+def _wrap_pi(a):
+    """Normaliza um ângulo para [-pi, pi]."""
+    import math
+    while a > math.pi:
+        a -= 2 * math.pi
+    while a < -math.pi:
+        a += 2 * math.pi
+    return a
+
 
 def get_sensor_inputs(worm, env, state) -> list:
-    """Devolve o estado com geometria: 11 features em [0,1] (direções em [-1,1])."""
+    """Devolve o estado com geometria: 17 features (direções em [-1,1], resto em [0,1])."""
+    import math
     max_dist = CONFIG['sensor_max_dist']
     radius   = CONFIG['arrival_radius']
+    limit    = CONFIG.get('map_limit', 32)
 
-    features = [0.0] * 11
+    features = [0.0] * 17
+
+    # ── Direção atual (propriocepção — fallback para vermes falsos de teste) ──
+    direction = getattr(worm, 'direction', None)
+    if direction is None:
+        dir_x, dir_z = 0.0, 1.0
+    else:
+        dir_x, dir_z = direction.x, direction.z
 
     # ── Luz ───────────────────────────────────────────────────────────────────
     light_src, dist_light = _nearest(worm, env.light_sources)
+    to_light = None
     if light_src is not None:
         to_light = light_src.position - worm.head.position
         dx, dz = _xz_unit(to_light)
@@ -65,6 +93,7 @@ def get_sensor_inputs(worm, env, state) -> list:
 
     # ── Chuva ─────────────────────────────────────────────────────────────────
     rain_src, dist_rain = _nearest(worm, env.rain_sources)
+    to_rain = None
     if rain_src is not None:
         to_rain = rain_src.position - worm.head.position
         dx, dz = _xz_unit(to_rain)
@@ -73,7 +102,7 @@ def get_sensor_inputs(worm, env, state) -> list:
         features[6] = min(dist_rain / max_dist, 1.0)
 
     # ── Pulso de chuva (vibração) ─────────────────────────────────────────────
-    features[7] = state['rain_pulse']
+    features[7] = state.get('rain_pulse', 0.0)
 
     # ── Obstáculo mais próximo (Fase 15) ─────────────────────────────────────
     obstacles = getattr(env, 'obstacles', [])
@@ -84,6 +113,25 @@ def get_sensor_inputs(worm, env, state) -> list:
         features[8] = dx
         features[9] = dz
         features[10] = min(dist_obs / max_dist, 1.0)
+
+    # ── Fase 12: velocidade / propriocepção ───────────────────────────────────
+    features[11] = max(-1.0, min(1.0, dir_x))
+    features[12] = max(-1.0, min(1.0, dir_z))
+
+    # ── Fase 12: distância às bordas (1=centro seguro, 0=na parede) ───────────
+    px = worm.head.position.x
+    pz = worm.head.position.z
+    features[13] = max(0.0, min(1.0, (limit - abs(px)) / limit))
+    features[14] = max(0.0, min(1.0, (limit - abs(pz)) / limit))
+
+    # ── Fase 12: ângulos relativos (quanto precisa virar; 0=alinhado) ─────────
+    cur = math.atan2(dir_z, dir_x)
+    if to_light is not None and (abs(to_light.x) > 0.01 or abs(to_light.z) > 0.01):
+        tgt = math.atan2(to_light.z, to_light.x)
+        features[15] = _wrap_pi(tgt - cur) / math.pi
+    if to_rain is not None and (abs(to_rain.x) > 0.01 or abs(to_rain.z) > 0.01):
+        tgt = math.atan2(to_rain.z, to_rain.x)
+        features[16] = _wrap_pi(tgt - cur) / math.pi
 
     return features
 

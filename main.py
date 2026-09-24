@@ -102,7 +102,7 @@ camera.parent = cam_pivot
 camera.position = (0, 40, -85)
 camera.rotation = (24, 0, 0)
 
-# ─── CÉREBRO: política estocástica (11 → 32 → 16 → 5 ações) ────────────────
+# ─── CÉREBRO: política estocástica (17 → 32 → 16 → 5 ações, Fase 12) ───────
 brain = PolicyNetwork(
     CONFIG['n_inputs'],
     CONFIG['n_hidden'],
@@ -111,7 +111,7 @@ brain = PolicyNetwork(
     n_hidden2=CONFIG.get('n_hidden2'),
 )
 
-# ─── CRÍTICO (Fase 8 — A2C): V(s) 11 → 32 → 16 → 1 ────────────────────────
+# ─── CRÍTICO (Fase 8 — A2C): V(s) 17 → 32 → 16 → 1 (Fase 12) ──────────────
 critic = CriticNetwork(
     CONFIG['n_inputs'],
     CONFIG['n_hidden'],
@@ -647,7 +647,7 @@ def update():
     # ── Partículas de chuva ───────────────────────────────────────────────────
     env.update_rain_particles()
 
-    # ── Estado (8-dim) e amostragem de ação ───────────────────────────────────
+    # ── Estado (17-dim, Fase 12) e amostragem de ação ──────────────────────────
     sensors = get_sensor_inputs(worm, env, state)
     action = brain.sample_action(sensors)
 

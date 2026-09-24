@@ -55,7 +55,7 @@ CONFIG = {
     'auto_difficulty'      : False, # Se True, sobe de nível a cada 80 episódios
 
     # ── Cérebro ──────────────────────────────────────────────────────────────
-    'n_inputs'         : 11,    # Features do estado: 8 (luz/chuva) + 3 (obstáculo)
+    'n_inputs'         : 17,    # Fase 12: 11 (luz/chuva+obs) + 6 (vel 2 + borda 2 + angulos 2)
     'n_hidden'         : 32,    # Fase 11: primeira camada oculta (era 16)
     'n_hidden2'        : 16,    # Fase 11: segunda camada oculta — arquitetura 11→32→16→5
     'n_outputs'        : 3,     # Saídas contínuas (usado pela Rede_Neural legada)

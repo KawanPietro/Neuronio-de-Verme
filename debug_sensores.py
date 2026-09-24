@@ -1,7 +1,7 @@
 """
-Debug do contrato de comportamento (Fase 1).
+Debug do contrato de comportamento (Fase 1 + Fase 12: estado 17-dim).
 
-Imprime o estado 8-dim e a recompensa por progresso a cada passo, mostrando que
+Imprime o estado 17-dim e a recompensa por progresso a cada passo, mostrando que
 `r` é MAIOR quando o verme se aproxima da chuva (e menor quando se afasta).
 
 Headless: usa entidades falsas em vez de abrir a janela do Ursina.
@@ -21,12 +21,14 @@ class FakeEntity:
 class FakeWorm:
     def __init__(self, x=0.0, y=1.25, z=0.0):
         self.head = FakeEntity(x, y, z)
+        self.direction = Vec3(0, 0, 1)
 
 
 class FakeEnv:
-    def __init__(self, rain, light):
+    def __init__(self, rain, light, obstacles=None):
         self.rain_sources = rain
         self.light_sources = light
+        self.obstacles = obstacles if obstacles is not None else []
 
 
 def new_state():
@@ -35,6 +37,7 @@ def new_state():
         'rain_pulse'      : 0.0,
         'prev_dist_light' : None,
         'prev_dist_rain'  : None,
+        'prev_dist_obs'   : None,
         'prev_position'   : None,
     }
 
@@ -86,15 +89,20 @@ def test_casos_limite():
     """Casos-limite: sem fontes, fonte no limite do mapa e worm parado (idle)."""
     all_ok = True
 
-    # C1 — Sem fontes no mapa: sensores zerados e recompensa neutra (sem crash).
+    # C1 — Sem fontes no mapa: sensores de fonte zerados e recompensa neutra (sem crash).
+    # Fase 12: propriocepção continua ativa (vel, borda) mesmo sem fontes.
     env = FakeEnv(rain=[], light=[])
     worm = FakeWorm(x=5, y=1.25, z=5)
     state = new_state()
     sensors = get_sensor_inputs(worm, env, state)
     r = calculate_reward(worm, env, state)
-    c1 = (all(abs(s) < 1e-9 for s in sensors)) and (abs(r) < 1e-9)
+    c1 = (len(sensors) == 17
+          and all(abs(s) < 1e-9 for s in sensors[0:11])
+          and abs(sensors[11] - 0.0) < 1e-9 and abs(sensors[12] - 1.0) < 1e-9
+          and 0.0 <= sensors[13] <= 1.0 and 0.0 <= sensors[14] <= 1.0
+          and abs(r) < 1e-9)
     all_ok &= c1
-    print(f"[{'OK' if c1 else 'FALHOU'}] sem fontes: sensores zerados, r neutro={r:+.3f}")
+    print(f"[{'OK' if c1 else 'FALHOU'}] sem fontes: sensores fonte zerados (17-dim), r neutro={r:+.3f}")
 
     # C2 — Fonte além do alcance dos sensores: features saturam em [0,1], sem crash.
     rain  = FakeEntity(x=100, y=1, z=0)
@@ -119,6 +127,20 @@ def test_casos_limite():
     c3 = r >= 0  # idle_cost = 0, mas proximity pode dar r > 0
     all_ok &= c3
     print(f"[{'OK' if c3 else 'FALHOU'}] idle: worm parado sem penalidade, r={r:+.3f}")
+
+    # C4 — Fase 12: 17-dim em faixa (vel [-1,1], borda [0,1], angulos [-1,1])
+    rain = FakeEntity(x=-10, y=1, z=0)
+    light = FakeEntity(x=+10, y=1, z=0)
+    env = FakeEnv(rain=[rain], light=[light])
+    worm = FakeWorm(x=0, y=1.25, z=0)
+    state = new_state()
+    sensors = get_sensor_inputs(worm, env, state)
+    c4 = (len(sensors) == 17
+          and -1.0 <= sensors[11] <= 1.0 and -1.0 <= sensors[12] <= 1.0
+          and 0.0 <= sensors[13] <= 1.0 and 0.0 <= sensors[14] <= 1.0
+          and -1.0 <= sensors[15] <= 1.0 and -1.0 <= sensors[16] <= 1.0)
+    all_ok &= c4
+    print(f"[{'OK' if c4 else 'FALHOU'}] fase12: 17-dim em faixa vel/borda/angulo={sensors[11:17]}")
 
     return all_ok
 

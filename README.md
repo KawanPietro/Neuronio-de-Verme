@@ -21,6 +21,7 @@ Uma simulação 3D educativa em Python que usa **redes neurais** e **aprendizado
 - [Aprendizado por currículo (Curriculum Learning)](#-aprendizado-por-currículo-curriculum-learning)
 - [A demonstração `DiaNoite.py`](#-a-demonstração-dianoitepy)
 - [Observações e limitações](#-observações-e-limitações)
+- [Estado atual e guia de estudo](#️-estado-atual-e-guia-de-estudo-para-o-grupo)
 - [Ideias para melhorias futuras](#-ideias-para-melhorias-futuras)
 
 ---
@@ -41,7 +42,7 @@ O projeto une duas áreas de estudo de forma visual e divertida:
 - 🟦 **Procurar chuva** → estar perto de fontes de chuva gera **recompensa positiva** (+)
 - ☀️ **Evitar luz** → estar perto de fontes de luz gera **recompensa negativa** (−)
 
-Douglas Adams estaria orgulhoso: o verme tem sensores de **fotorecepção** (luz) e de **tato/vibração** (chuva), um **cérebro** de 8 entradas → 16 neurônios ocultos → 5 ações discretas (softmax), e aprende por **backpropagation + política estocástica**.
+Douglas Adams estaria orgulhoso: o verme tem sensores de **fotorecepção** (luz), **tato/vibração** (chuva), **propriocepção** (direção/velocidade) e **desvio de obstáculos**, um **cérebro** de 17 entradas → 32 → 16 neurônios ocultos → 5 ações discretas (softmax, Fase 12), e aprende por **backpropagation + PPO/A2C**.
 
 ---
 
@@ -59,13 +60,13 @@ Douglas Adams estaria orgulhoso: o verme tem sensores de **fotorecepção** (luz
 Neuronio-de-Verme/
 ├── main.py              # Ponto de entrada: orquestra câmera, editor, update e input
 ├── config.py            # Todas as constantes em um dicionário CONFIG
-├── perception.py        # Contrato de comportamento: sensores 8-dim + recompensa por progresso
-├── mlp.py               # MLP com backprop + política estocástica (softmax, 5 ações)
-├── test_mlp.py          # Teste dos gradientes (backward vs. diferenças finitas)
+├── perception.py        # Contrato de comportamento: sensores 17-dim (Fase 12) + recompensa por progresso
+├── mlp.py               # MLP + Policy/Critic + PPO/A2C + Replay Buffer (softmax, 5 ações)
+├── test_mlp.py          # 15 testes: gradientes, REINFORCE, A2C, PPO, buffer, save/load
 ├── Rede_Neural.py       # Cérebro LEGADO (Fase 1, Hebbian-like) — referência didática
-├── worm.py              # O corpo do verme (cabeça + segmentos + animação)
-├── environment.py       # Fontes de luz/chuva e partículas de chuva
-├── debug_sensores.py    # Debug headless do contrato (sensores 8-dim + recompensa por passo)
+├── worm.py              # O corpo do verme (cabeça + segmentos + animação + colisão)
+├── environment.py       # Fontes de luz/chuva + obstáculos/muros + partículas de chuva
+├── debug_sensores.py    # Debug headless do contrato (sensores 17-dim + recompensa por passo)
 ├── Verme.py             # Shim de compatibilidade (executa main.py)
 ├── DiaNoite.py          # Demonstração separada: ciclo de dia/noite
 ├── Instalar Ursina.py   # Script de teste rápido para verificar se o Ursina funciona
@@ -168,29 +169,31 @@ Este arquivo (referência didática da Fase 1) define a antiga classe `WormBrain
 O cérebro usado pelo jogo é uma **política estocástica**: um MLP com **backpropagation** implementado do zero, com um cabeçote **softmax** sobre ações discretas. (A `Rede_Neural.py` antiga, com regra Hebbian-like, ficou como referência didática.)
 
 ```
-        ENTRADAS              OCULTA              AÇÕES (softmax)
-   ┌───────────────┐    ┌──────────────┐    ┌──────────────────┐
-   │ luz_dir (x,z) │    │              │    │  esquerda        │  girar −θ
-   │ luz_dist      │    │  h[0]...h[15]│───▶│  frente_esquerda │  girar −θ/2
-   │ luz_perigo    │───▶│              │    │  frente          │  seguir em frente
-   │ chuva_dir(x,z)│    └──────────────┘    │  frente_direita  │  girar +θ/2
-   │ chuva_dist    │                        │  direita         │  girar +θ
-   │ pulso_chuva   │                        └──────────────────┘
-   └───────────────┘
+        ENTRADAS (17)              OCULTAS              AÇÕES (softmax)
+   ┌───────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+   │ luz_dir (x,z)     │    │                  │    │  esquerda        │  girar −θ
+   │ luz_dist/perigo   │    │  h1[0]...h1[31]  │───▶│  frente_esquerda │  girar −θ/2
+   │ chuva_dir (x,z)   │───▶│        ↓         │    │  frente          │  seguir em frente
+   │ chuva_dist/pulso  │    │  h2[0]...h2[15]  │───▶│  frente_direita  │  girar +θ/2
+   │ obs_dir/dist (x,z)│    │                  │    │  direita         │  girar +θ
+   │ vel, borda, ângulos│   └──────────────────┘    └──────────────────┘
+   └───────────────────┘   (Fase 11: 2 camadas + Fase 12: 17-dim)
 ```
 
-**Arquitetura:** `8 entradas → 16 neurônios ocultos → 5 ações discretas`
+**Arquitetura (Fase 12):** `17 entradas → 32 → 16 ocultos → 5 ações discretas` (actor ~1189 + critic ~1121 params)
 
 | Classe / método | Função |
 |-----------------|--------|
 | `MLP(n_inputs, n_hidden, n_outputs)` | MLP genérico com **backpropagation camada a camada** (regra da cadeia visível). Ativações ocultas à escolha: `tanh` ou `relu`. |
 | `MLP.forward(inputs)` | Propagação direta; guarda as ativações intermediárias para o `backward`. |
 | `MLP.backward_from_output_grad(grad)` | Backprop do gradiente da saída (`dL/dz`) até todos os parâmetros. |
-| `PolicyNetwork` | MLP + **softmax** sobre as ações → `π(a|s)`; `sample_action()` **amostra** (exploração), `imitate()` treina por **cross-entropy supervisionada** (imitação), `update_episode()` treina por REINFORCE com baseline (+ opcional `λ·CE` híbrido). |
-| `save_weights()` / `load_weights()` | **Persistência**: salva/carrega todos os pesos em `pesos.json` (teclas `S`/`L`, ou automático no fim da avaliação). |
-| `compute_returns(rewards, γ)` | Retornos descontados `G_t = Σ γ^k·r_{t+k}` (do fim para o início). |
+| `PolicyNetwork` | MLP + **softmax** sobre as ações → `π(a|s)`; `sample_action()` **amostra** (exploração), `imitate()` treina por **cross-entropy** (Fase 4A), `update_episode()` treina por REINFORCE/A2C/PPO (+ `λ·CE` híbrido na Fase 4B). |
+| `CriticNetwork` | MLP `17→32→16→1` que estima `V(s)`; usado no GAE + loss MSE (Fases 8–9). |
+| `ReplayBuffer` | Guarda até 50 episódios e treina PPO em mini-batches × epochs (Fase 13). |
+| `save_brain()` / `load_brain()` | **Persistência**: salva/carrega actor+critic em `pesos.json` (teclas `S`/`L`); descarta pesos com `n_inputs` incompatível (ex: 11→17 exige treino novo). |
+| `compute_returns` / `compute_gae` | Retornos `G_t` (Fase 3) e advantages GAE `A_t` (Fase 8). |
 
-**Atualização (`PolicyNetwork.update_episode`, Fase 3):** *REINFORCE com baseline* (Williams 1992), treinado ao fim de cada episódio de `H` passos:
+**Atualização (Fases 3/8/9):** REINFORCE → A2C (GAE + critic) → PPO (clipped surrogate), treinado ao fim de cada episódio de `H` passos:
 
 ```
 G_t = Σ γ^k · r_{t+k}          (retornos descontados)
@@ -226,37 +229,37 @@ b   = média(G)                  (baseline: reduz a variância)
 - Cabeça (esfera) + **12 segmentos** com gradiente de cor (preto → ciano) e animação de ondulação.
 - Os segmentos seguem o histórico de posições da cabeça (efeito "cobra").
 
-**Sensores** (`get_sensor_inputs()` em `perception.py`) — **estado com geometria, 8 dimensões**:
+**Sensores** (`get_sensor_inputs()` em `perception.py`) — **estado 17-dim (Fase 12 = 11 + 6)**:
 
-| Feature | Significado |
-|---------|-------------|
-| `luz_dir` (x, z) | Vetor unitário no plano XZ até a fonte de luz mais próxima |
-| `luz_dist` | Distância normalizada `[0,1]` até essa luz |
-| `luz_perigo` | `1` se dentro do raio de perigo da luz, senão `0` |
-| `chuva_dir` (x, z) | Vetor unitário no plano XZ até a fonte de chuva mais próxima |
-| `chuva_dist` | Distância normalizada `[0,1]` até essa chuva |
-| `pulso_chuva` | Vibração (sinal de "tato") |
+| # | Feature | Significado |
+|---|---------|-------------|
+| 0–3 | `luz_dir (x,z)`, `luz_dist`, `luz_perigo` | Direção, distância `[0,1]` e flag de perigo da luz |
+| 4–7 | `chuva_dir (x,z)`, `chuva_dist`, `pulso_chuva` | Direção, distância `[0,1]` e vibração da chuva |
+| 8–10 | `obs_dir (x,z)`, `obs_dist` | Direção e distância do obstáculo (Fase 15) |
+| 11–12 | `vel_x/z` | Direção atual do verme — propriocepção `[-1,1]` (Fase 12) |
+| 13–14 | `borda_x/z` | Distância à parede `[0,1]` — `1`=centro, `0`=borda (Fase 12) |
+| 15–16 | `angulo_luz/chuva` | Quanto precisa virar `/π` em `[-1,1]` — `0`=alinhado (Fase 12) |
 
-> Antes o verme só via dois escalares ("estar perto de X"), o que não dizia **em que direção** ir. Com a geometria, a rede pode aprender a navegar.
+> Evolução: 8-dim (Fase 1: só luz/chuva) → 11-dim (Fase 15: +obstáculos) → 17-dim (Fase 12: +vel/borda/ângulos). Antes o verme sabia "onde está a chuva", agora sabe também "para onde estou indo e quanto falta virar".
 
 **Recompensa** (`calculate_reward()` em `perception.py`) — **por progresso**, calculada a cada **frame** e normalizada em `[-1, +1]`:
 | Termo | Efeito |
 |-------|--------|
-| `+ progresso` em direção à chuva | **Δ distância curvada** (melhorou → positivo) |
-| `− progresso` em direção à luz | Aproximar da luz é ruim |
-| `+ BÔNUS` ao entrar no raio da chuva | Recompensa de evento de chegada |
-| `− PENALIDADE` ao entrar no perigo da luz | Recompensa de evento de perigo |
-| `− CUSTO` por ficar parado | Anti-farniente (evita girar em círculo) |
+| `+ progresso` chuva / `− progresso` luz | **Δ distância** × `progress_scale` (melhorou → positivo) |
+| `+ proximidade` chuva / `− proximidade` luz | `1/dist` contínuo — puxa mesmo de longe (Fase 7) |
+| `+ BÔNUS` chegada / `− PENALIDADE` perigo | Eventos ao cruzar `arrival_radius` + bônus por permanecer |
+| `− colisão/proximidade` obstáculo | Penalidade ao bater + por estar perto; `+` ao se afastar (Fase 15) |
+| `− repetição` de ação | Quebra colapso "sempre mesma ação" (Fase 7, janela 20) |
 
 **Movimento:**
-1. Lê o estado 8-dim → `brain.sample_action(sensors)` amostra uma das **5 ações discretas**.
-2. Calcula a direção do "professor" (`get_target_direction()` — atração pela chuva + repulsão da luz, sem órbita).
+1. Lê o estado 17-dim → `brain.sample_action(sensors)` amostra uma das **5 ações discretas**.
+2. Calcula a direção do "professor" (`get_target_direction()` — atração chuva + repulsão luz + fuga de bordas + contorno de pedras).
 3. A ação vira o verme por um múltiplo da taxa máxima: `{−θ, −θ/2, 0, +θ/2, +θ}`.
-4. Mistura o giro do professor com o giro da política conforme a **autonomia**.
-5. Move a cabeça (`SPEED × tempo`) com velocidade constante, limitando a posição ao mapa `[-18, 18]`.
-6. Cada passo é guardado no episódio atual; ao completar `H` passos, `brain.update_episode()` treina (retornos descontados + baseline), as fontes são reposicionadas aleatoriamente e um log do episódio vai para o terminal e para `episodios.csv`.
+4. Mistura o giro do professor com o giro da política conforme a **autonomia** (estágios A/B/C).
+5. Move a cabeça (`SPEED × tempo`) com velocidade constante, com **colisão/deslize** em obstáculos, limitado ao mapa `[-32, 32]`.
+6. Cada passo é guardado no episódio atual; ao completar `H` passos, treina (PPO/A2C via buffer ou direto), reposiciona fontes+obstáculos e registra no terminal e em `episodios.csv`.
 
-> Para validar o contrato sem abrir a janela, rode `python debug_sensores.py` — ele imprime `[sensores 8-dim] + r` por passo e confirma que `r` é maior quando o verme se aproxima da chuva.
+> Para validar o contrato sem abrir a janela, rode `python debug_sensores.py` — ele imprime `[sensores 17-dim] + r` por passo e confirma que `r` é maior quando o verme se aproxima da chuva (testes C1–C4).
 
 ---
 
@@ -265,24 +268,24 @@ b   = média(G)                  (baseline: reduz a variância)
 Um resumo visual do loop que roda a cada frame:
 
 ```
- Sensores 8-dim (geometria)
+ Sensores 17-dim (geometria + propriocepção + obstáculos)
         │
         ▼
  Política π(a|s) ──sample──▶ ação (5 discretas) ──▶ giro + velocidade constante
         │
         ▼
- Professor (campos de potencial) ──▶ giro_professor
+ Professor (potencial: chuva/luz/borda/pedras) ──▶ giro_professor
         │
         ▼
- Mistura: giro = lerp(professor, política, autonomia)
+ Mistura: giro = lerp(professor, política, autonomia A/B/C)
         │
         ▼
- Move o verme  ──▶  Recompensa por progresso (a cada frame)  ──▶  guarda (s, a, r)
-        ▲                                                        │
-        └────────────  atualiza total_reward ◀───────────────────┘
+ Move o verme (colisão/deslize) ──▶ Recompensa por progresso ──▶ guarda (s, a, r)
+        ▲                                                              │
+        └────────────  atualiza total_reward ◀─────────────────────────┘
                         ↑                              H passos coletados ▼
-              aumenta a AUTONOMIA                  update_episode(): G_t, baseline,
-                                                   vantagem, θ←θ+α·∇θJ (novo episódio)
+              estágio A/B/C                   PPO/A2C: GAE, clipping, critic
+                                              θ←θ+α·∇θJ (cena nova por episódio)
 ```
 
 ---
@@ -295,11 +298,11 @@ Os conceitos-chave implementados:
 |-------|------------------|---------------------|
 | **Agente** | O verme | `head` e seus segmentos |
 | **Ambiente** | A cena 3D com luzes e chuva | `main.py` / `environment.py` |
-| **Estado (sensores)** | Estado 8-dim com geometria (direções, distâncias, perigo, pulso) | `get_sensor_inputs()` em `perception.py` |
+| **Estado (sensores)** | Estado 17-dim: luz/chuva + obstáculos + vel/borda/ângulos | `get_sensor_inputs()` em `perception.py` |
 | **Ação** | Uma de 5 direções discretas (giro `−θ..+θ`) | `sample_action()` em `mlp.py` |
-| **Recompensa** | Sinal de progresso que guia o aprendizado | `calculate_reward()` em `perception.py` |
-| **Política** | Como o agente escolhe a ação | `PolicyNetwork` em `mlp.py` |
-| **Professor** | Guia determinístico que demonstra o comportamento ideal | `get_target_direction()` |
+| **Recompensa** | Progresso + proximidade + eventos + anti-colapso, em `[-1,1]` | `calculate_reward()` em `perception.py` |
+| **Política / Valor** | `π(a|s)` (actor) + `V(s)` (critic) + GAE + PPO clipping | `PolicyNetwork`/`CriticNetwork` em `mlp.py` |
+| **Professor** | Potencial: atração chuva + repulsão luz + fuga borda + contorno pedras | `get_target_direction()` em `main.py` |
 
 ---
 
@@ -314,8 +317,8 @@ Na Fase 4 a autonomia é ditada por **estágios do currículo** (não mais pelo 
 | Estágio | Episódios | Movimento | Treino |
 |---------|-----------|-----------|--------|
 | **A — Imitação** | 1º ao `stage_a_episodes` | 100% professor | **Cross-entropy supervisionada** (`brain.imitate`) — o verme "cola" no professor |
-| **B — Híbrido** | seguintes `stage_b_episodes` | autonomia sobe `0→1` | **REINFORCE + λ·CE** (`update_episode(imitation_weight=λ)`), λ decai a cada episódio |
-| **C — Autônomo** | depois | **100% rede** (professor desligado) | REINFORCE puro (`λ = 0`) |
+| **B — Híbrido** | seguintes `stage_b_episodes` | autonomia sobe `0→1` | **PPO/A2C + λ·CE** (`update_episode(imitation_weight=λ)`), λ decai a cada episódio |
+| **C — Autônomo** | depois | **100% rede** (professor desligado) | PPO/A2C puro (`λ = 0`) |
 
 - `λ` começa em `lambda_start` e decai (`lambda_decay`) por episódio até 0 — o professor vira tutor e depois some.
 - `teacher_action()` converte a direção do campo de potencial na **ação discreta ideal** (alvo da imitação).
@@ -343,7 +346,7 @@ Isso é inspirado em **campos de potencial** (*potential fields*), técnica clá
 python main.py --eval --episodes=20   # roda 20 episódios, salva pesos e fecha
 ```
 
-O CSV (`episodios.csv`) registra por episódio: `estagio, recompensa_*, retorno, entropia, learning_rate, lambda_imitacao, chegada_chuva, perigo_luz, acao_principal, semente` — com a semente fixa no `CONFIG`, qualquer treino é **reproduzível**.
+O CSV (`episodios.csv`) registra por episódio: `estagio, recompensa_*, retorno, entropia, learning_rate, lambda_imitacao, chegada_chuva, perigo_luz, colisao_obs, acao_principal, semente, dificuldade` — com a semente fixa no `CONFIG`, qualquer treino é **reproduzível**. Pesos antigos com `n_inputs` diferente são ignorados com aviso (ex: Fase 12 exige treino novo 11→17).
 
 **Robustez e calibração (Fase 6):**
 - **Exploração estruturada** — a temperatura do softmax **decai** a cada episódio de treino (`temperature_decay`), com piso `min_temperature`; a política nunca fica 100% greedy. No `--eval` a temperatura não decai.
@@ -386,33 +389,54 @@ Analisando o código, alguns pontos merecem atenção para quem for continuar o 
 
 ---
 
+## 🗺️ Estado atual e guia de estudo (para o grupo)
+
+**Onde estamos (Fase 12 concluída — código):** estado 17-dim + rede `17→32→16→5` + PPO/A2C + obstáculos/muros.
+
+| Fase | O que foi | Status | Como ver no código |
+|------|-----------|--------|-------------------|
+| 0–4 | Base, sensores, MLP, REINFORCE, currículo A/B/C | ✅ | `main.py: current_stage/lambda_imitation`, `perception.py` |
+| 5–7 | HUD/grade/persistência, robustez, reward shaping | ✅ | `main.py: HUD/grid`, `test_mlp.py`, `debug_sensores.py` |
+| 8–9 | A2C (critic+GAE) e PPO (clipping) — 40% eval | ✅ | `mlp.py: CriticNetwork/compute_gae/ppo_grad` |
+| 10–11 | Treino longo + rede profunda `→32→16→` | ⚠️ parcial | `config.py: lr_decay/temp`, `EXPERIMENTOS.md: #8–10` |
+| 12 | Estado 17-dim (vel/borda/ângulos) | ✅ código | `perception.py: get_sensor_inputs`, `config.py: n_inputs=17` |
+| 13 | Replay Buffer off-policy | ✅ código | `mlp.py: ReplayBuffer/ppo_update_from_buffer` |
+| 15 | Obstáculos/muros + 4 níveis + colisão | ✅ | `environment.py: randomize_obstacles`, tecla `O` |
+| 14 | Avaliação DoD ≥80% | ⚠️ parcial (10/100 seguro, DoD não atingido) | Ver `EXPERIMENTOS.md #13`; multi-seed 500+ eps pendente |
+
+**Roteiro de estudo (30 min para apresentar):**
+1. `python test_mlp.py` — prova que o backprop está certo (5 min).
+2. `python debug_sensores.py` — prova que a recompensa ensina "ir para chuva" + testes C1–C4 da Fase 12 (5 min).
+3. `python main.py` — mostre HUD, tecla `P` (grade), tecla `A` (professor on/off), tecla `O` (níveis) (10 min).
+4. `EXPERIMENTOS.md` + `episodios.csv` — conte a história 20%→40% e por que colapsa sem Fase 10/11/12 (10 min).
+5. Detalhe de referência: `PLANO_DE_MELHORIAS.md` tem o diagnóstico completo (treino curto, dados descartados, rede pequena).
+
+**Como registrar a próxima mudança (padrão do grupo):** edite `config.py` ou código → rode `test_mlp.py` + `debug_sensores.py` → treino curto `--episodes=35` → eval `--eval --episodes=50` → adicione 1 linha em `EXPERIMENTOS.md` → atualize esta seção + `PLANO_DE_MELHORIAS.md`.
+
 ## 💡 Ideias para melhorias futuras
 
-Pontos de partida para evoluir o projeto, do mais simples ao mais ambicioso:
-
 **Simplicidade / manutenção**
-- [ ] Remover o `update()` morto e unificar o loop em uma única versão.
-- [ ] Refatorar `Verme.py` em módulos (`worm.py`, `environment.py`, `editor.py`, `camera.py`).
-- [ ] Adicionar `requirements.txt` e `.gitignore` (excluir `__pycache__`).
-- [ ] Consertar as teclas do `DiaNoite.py` e usar `camera.raycast`.
-- [ ] Centralizar as constantes mágicas (30, 20, 5, etc.) em um dicionário de configuração.
+- [x] Remover o `update()` morto e unificar o loop em `main.py`.
+- [x] Refatorar em módulos (`worm.py`, `environment.py`, `perception.py`, `mlp.py`).
+- [x] Adicionar `requirements.txt` e `.gitignore`.
+- [x] Consertar as teclas do `DiaNoite.py` e usar `camera.raycast`.
+- [x] Centralizar as constantes mágicas em `config.py`.
 
 **Aprendizado**
-- [x] Implementar **REINFORCE / policy gradient** com episódios, baseline e desconto (Fases 3–4) — evoluir para A2C/PPO fica como desafio.
-- [ ] Adicionar **memória/recorrência** (RNN) para o verme lembrar estados anteriores.
-- [x] Salvar/carregar pesos (`json` via `save_weights`/`load_weights`) e medir o progresso entre execuções.
-- [ ] Adicionar mais sensores (temperatura, "cheiro" de alimento, predadores).
+- [x] REINFORCE (Fases 3–4) → A2C (Fase 8) → PPO (Fase 9).
+- [x] Rede profunda `17→32→16→5` (Fase 11) + estado 17-dim (Fase 12).
+- [x] Replay Buffer (Fase 13, código) + obstáculos (Fase 15).
+- [ ] Treino longo 500+ eps com 17-dim × multi-seed (próximo passo da Fase 12).
+- [ ] Adicionar **memória/recorrência** (RNN) e novos sensores (temperatura, cheiro, predadores).
 
 **Ambiente / visual**
-- [x] Render os dados de aprendizado na tela (HUD com episódio, estágio, recompensa média, entropia).
-- [x] Visualizar a política aprendida (grade de setas coloridas sobre o mapa, tecla `P`).
+- [x] HUD, grade de setas (`P`), níveis de dificuldade (`O`), anti-colapso (entropia + repetição).
 - [ ] Integrar o ciclo de dia/noite do `DiaNoite.py` na simulação principal.
 - [ ] Adicionar múltiplos vermes competindo/cooperando.
-- [x] Evitar colapso numa ação só — bônus de entropia (Fase 2) + anti-farniente (Fase 1).
 
 **Experimentação**
-- [x] Rodar múltiplas execuções ("sementes") — semente fixa no `CONFIG` (`seed = 42`) torna o treino reproduzível.
-- [x] Criar um csv/log com a curva de recompensa ao longo do tempo (`episodios.csv`).
+- [x] Multi-seed reproduzível + `episodios.csv` + tabela em `EXPERIMENTOS.md`.
+- [ ] Fase 14: validar DoD ≥80% em 100+ eps (ou documentar limite do RL puro sem frameworks).
 
 ---
 

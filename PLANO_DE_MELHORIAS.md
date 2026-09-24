@@ -24,11 +24,11 @@
 | 7 | Engenharia de recompensa | Sinais fortes, anti-colapso, multi-seed | M | ✅ concluída |
 | 8 | Actor-Critic (A2C) | Critic V(s) + GAE advantage | M | ✅ concluída |
 | 9 | PPO | Clipped surrogate objective | M | ✅ concluída |
-| 10 | Treino longo | 500+ episódios com PPO + semente fixa | S | ✅ parcial (100 eps → 15%, 253/500 colapso) |
+| 10 | Treino longo | 500+ episódios com PPO + semente fixa | S | ✅ parcial (17-dim 419/500 → 12.6% C, colapso) |
 | 11 | Expansão de rede | Arquitetura maior (11→32→16→5, 1.7k) | M | ✅ parcial (100 eps → 0%, precisa mais dados) |
-| 12 | Espaço de estado expandido | Features adicionais (velocidade, histórico, ângulo) | M | ⏳ pendente |
+| 12 | Espaço de estado expandido | Features adicionais (velocidade, borda, ângulo) | M | ✅ concluída (código, 11→17) |
 | 13 | Replay Buffer (off-policy) | Reutilizar dados de episódios passados | L | ✅ concluída (código) — ver nota |
-| 14 | Avaliação e_DoD | Validar ≥80% em 100+ eps com multi-seed | M | ⏳ pendente |
+| 14 | Avaliação e_DoD | Validar ≥80% em 100+ eps com multi-seed | M | ⚠️ parcial (1 seed 100eps → 10%, DoD não atingido) |
 | 15 | Obstáculos e níveis | Pedras com colisão, 4 níveis, 11 sensores | M | ✅ concluída |
 
 > Estimativa de esforço: S = 1 sessão, M = 2-4, L = 4+.
@@ -131,7 +131,7 @@ O reward é por passo (200 passos/episódio), mas o agente precisa lembrar: "há
 - `config.py` — todas as constantes
 - `mlp.py` — PolicyNetwork + CriticNetwork + REINFORCE/A2C/PPO
 - `main.py` — loop do jogo, currículo, HUD, editor
-- `perception.py` — sensores (8 features) + recompensa por progresso
+- `perception.py` — sensores (17 features, Fase 12) + recompensa por progresso
 - `worm.py` — corpo do verme (cabeça + segmentos)
 - `environment.py` — chuva/luz/fontes + randomização
 - `test_mlp.py` — 13 testes (gradientes, A2C, PPO, save/load)
@@ -169,15 +169,17 @@ python -m py_compile config.py mlp.py main.py perception.py worm.py environment.
 **Hipótese:** com 500+ episódios, o advantage de8-12 passos do PPO tem tempo suficiente para propagar o sinal de recompensa e o agente aprende a navegar.
 
 **Tarefas:**
-- [ ] Rodar PPO com `--episodes=500` (seed fixa)
+- [x] Rodar PPO com `--episodes=500` (seed fixa) — parcial 419/500 em 60min, timeout no ep417 (ver `EXPERIMENTOS.md #14`)
 - [ ] Rodar PPO com `--episodes=1000` (seed fixa)
-- [ ] Reduzir `lr_decay` (0.998 em vez de 0.995) — lr não decai tanto
-- [ ] Reduzir `temperature_decay` (0.998 em vez de 0.995) — explora por mais tempo
-- [ ] Aumentar `min_temperature` para 0.2 (permite exploração residual)
-- [ ] Avaliar os pesos finais com `--eval --episodes=100`
+- [x] Reduzir `lr_decay` (0.998 em vez de 0.995) — já em `config.py`
+- [x] Reduzir `temperature_decay` (0.998 em vez de 0.995) — já em `config.py`
+- [x] Aumentar `min_temperature` para 0.2 — já em `config.py`
+- [ ] Avaliar os pesos finais com `--eval --episodes=100` — pendente (pesos do run parcial não salvos)
 - [ ] Comparar com baseline de40% (Fase 9)
 
-**Métrica de sucesso:** ≥50% (melhoria de +10pp sobre Fase 9).
+**Resultado parcial 2026-09 (17-dim, dif FACIL):** 389eps estágio C → 49/389 seguro (12.6%) vs 10% com 35eps. Ganho marginal; colapso persiste.
+
+**Métrica de sucesso:** ≥50% (melhoria de +10pp sobre Fase 9) — **não atingida**.
 
 **Parâmetros sugeridos:**
 ```python
@@ -207,13 +209,13 @@ python -m py_compile config.py mlp.py main.py perception.py worm.py environment.
 
 ---
 
-## Fase 12 — Espaço de estado expandido
+## Fase 12 — Espaço de estado expandido ✅ concluída (código)
 
 **Objetivo:** dar ao agente informação mais rica sobre si mesmo e sobre o mundo.
 
-**Hipótese:** com8 features extras (16 total), o agente pode aprender a "navegar" (não só reagir) — considerando velocidade, bordas, e histórico.
+**Hipótese:** com6 features extras (17 total = 11 da Fase 15 + 6), o agente pode aprender a "navegar" (não só reagir) — considerando velocidade, bordas, e ângulo relativo.
 
-**Novas features (16-dim):**
+**Novas features (17-dim = 11 + 6):**
 
 | Feature | Descrição |
 |---------|-----------|
@@ -223,17 +225,25 @@ python -m py_compile config.py mlp.py main.py perception.py worm.py environment.
 | `chuva_dir.x/z` | direção XZ unitária para chuva |
 | `chuva_dist` | distância normalizada [0,1] |
 | `pulso_chuva` | vibração (tato) |
-| **NOVO:** `vel_x/z` | vetor velocidade normalizado |
-| **NOVO:** `borda_x/z` | distância normalizada às bordas |
-| **NOVO:** `angulo_luz` | ângulo relativo (atan2) entre direção atual e luz |
-| **NOVO:** `angulo_chuva` | ângulo relativo entre direção atual e chuva |
+| `obs_dir.x/z` | direção XZ unitária para obstáculo (Fase 15) |
+| `obs_dist` | distância normalizada [0,1] até obstáculo (Fase 15) |
+| **NOVO:** `vel_x/z` | direção atual X/Z (propriocepção, [-1,1]) |
+| **NOVO:** `borda_x/z` | distância à borda X/Z normalizada [0,1] (1=centro, 0=parede) |
+| **NOVO:** `angulo_luz` | ângulo relativo direção->luz / pi, em [-1,1] (0=alinhado) |
+| **NOVO:** `angulo_chuva` | ângulo relativo direção->chuva / pi, em [-1,1] (0=alinhado) |
 
-**Tarefas:**
-- [ ] Expandir `get_sensor_inputs()` para16 features
-- [ ] Atualizar `n_inputs=16` no CONFIG
-- [ ] Adaptar todas as redes (MLP, PolicyNetwork, CriticNetwork)
-- [ ] Treinar 500+ eps com 16 features + rede maior (Fase 11)
-- [ ] Comparar com8 features (Fase 10/11)
+**Implementado:**
+- [x] Expandir `get_sensor_inputs()` para17 features (`perception.py`, com `_wrap_pi`)
+- [x] Atualizar `n_inputs=17` no CONFIG (actor 1189 + critic 1121 ≈ 2.3k params)
+- [x] Redes genéricas (MLP/Policy/Critic já usam `n_inputs`; `load_brain` descarta pesos 11-dim com aviso)
+- [x] `debug_sensores.py`: FakeWorm com `direction`, FakeEnv com `obstacles`, testes C1 (17-dim) + C4 (faixas)
+- [x] `main.py`: comentários 17-dim (cérebro/crítico/estado)
+- [ ] Treinar 500+ eps com 17 features + rede maior (Fase 11) — pesos antigos incompatíveis, treino novo necessário
+- [ ] Comparar com11 features (Fase 10/11)
+
+**Validação 2026-09 (headless, sem GUI):** 35 eps × 200 passos, PPO puro 17-dim, sem crash (ver `EXPERIMENTOS.md #11`).
+
+**Treino GUI 2026-09 (dif FACIL, ver `EXPERIMENTOS.md #12`):** 35eps (A10/B20/C5) + eval 20eps → 15% seguro (3/20). Estágio C 1/5 seguro. Colapso persiste (entropia 0). Conclusão: 17-dim exige 500+ eps; 35eps insuficiente.
 
 **Métrica de sucesso:** ≥60% (+5pp sobre Fase 11).
 
@@ -281,12 +291,14 @@ python -m py_compile config.py mlp.py main.py perception.py worm.py environment.
 **Objetivo:** validar se o verme atinge o critério de80% de chegada sem perigo.
 
 **Tarefas:**
-- [ ] Treinar a melhor combinação (Fase10-13) com3 sementes × 500 eps
-- [ ] Avaliar cada semente com `--eval --episodes=100`
-- [ ] Calcular: % de episódios com `chegada_chuva > 0` E `perigo_luz == 0`
-- [ ] Se ≥80%:DoD atingido
-- [ ] Se60-80%: considerar "aceitável" e documentar limitações
-- [ ] Se <60%: considerar alternativas radicais (ver abaixo)
+- [ ] Treinar a melhor combinação (Fase10-13) com3 sementes × 500 eps (pendente — exige nightly run)
+- [x] Avaliar 1 semente com `--eval --episodes=100` (pesos 17-dim #12, dif FACIL)
+- [x] Calcular: % de episódios com `chegada_chuva > 0` E `perigo_luz == 0` → **10% (10/100)**
+- [ ] Se ≥80%:DoD atingido — **NÃO atingido**
+- [ ] Se60-80%: considerar "aceitável" e documentar limitações — **NÃO atingido**
+- [x] Se <60%: considerar alternativas radicais (ver abaixo) — **CASO ATUAL**
+
+**Resultado 2026-09 (ver `EXPERIMENTOS.md #13`):** eval 100eps, 14/100 chegada>0, 10/100 seguro, entropia 0.000. DoD <60% → vale avaliar DQN/entorno simplificado/clonagem ou aceitar limitação do RL puro.
 
 **Alternativas se DoD não for atingido:**
 1. **DQN com ε-greedy**: off-policy puro, replay buffer nativo
@@ -312,7 +324,7 @@ python -m py_compile config.py mlp.py main.py perception.py worm.py environment.
 
 | Termo | No projeto | Onde aparece |
 |-------|-----------|--------------|
-| Estado `s` | 8 features (dir/dist/perigo/pulso) | `get_sensor_inputs()` |
+| Estado `s` | 17 features (dir/dist/perigo/pulso + obs + vel/borda/angulos) | `get_sensor_inputs()` |
 | Ação `a` | uma das 5 direções | `sample_action(π)` |
 | Política `π(a|s)` | softmax do MLP | ponta do `forward` |
 | Retorno `G_t` | soma descontada `Σγ^k r` | `compute_returns()` |
