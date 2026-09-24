@@ -1,11 +1,20 @@
 # Plano de Melhorias — Verme Autônomo
 
+> ❄️ **ESTADO CONGELADO (2026-09-24):** treino encerrado e documentado.
+> Trilha legada (luz/chuva, 17-dim) preservada por padrão; trilha alimento
+> (11-dim, `--maze=A/B`) funcional em GUI + headless. Veredito Fase 14:
+> DoD relativo **não atingido** (aprendido 21–26% do professor; #15–16).
+> Reprodução em `EXPERIMENTOS.md #15–16` e seção "Como rodar".
+> Novos treinos longos desaconselhados sem hipótese nova (ver T5–T8).
+
 > Roteiro de evolução do projeto para chegar a um **verme 100% autônomo** (decide sozinho, sem professor), **didático e funcional**.
 >
 > Decisões de escopo alinhadas:
 > - **Cérebro**: Puro Python do zero (sem NumPy/PyTorch) — cada equação fica visível.
 > - **Autonomia final**: rede neural decide 100% das ações; o professor só existe nas fases de treino.
-> - **Comportamentos**: continuar com chuva (alvo) e luz (perigo).
+> - **Comportamentos**: trilha legada com chuva (alvo) e luz (perigo);
+>   trilha atual com **alimento** (objetivo único) atrás de `--maze=A/B`
+>   (ver seção F8 do `README.md`).
 > - **Entregável**: este documento de rota por etapas.
 
 ---
@@ -28,14 +37,16 @@
 | 11 | Expansão de rede | Arquitetura maior (11→32→16→5, 1.7k) | M | ✅ parcial (100 eps → 0%, precisa mais dados) |
 | 12 | Espaço de estado expandido | Features adicionais (velocidade, borda, ângulo) | M | ✅ concluída (código, 11→17) |
 | 13 | Replay Buffer (off-policy) | Reutilizar dados de episódios passados | L | ✅ concluída (código) — ver nota |
-| 14 | Avaliação e_DoD | Validar ≥80% em 100+ eps com multi-seed | M | ⚠️ parcial (1 seed 100eps → 10%, DoD não atingido) |
+| 14 | Avaliação e_DoD | Validar ≥80% em 100+ eps com multi-seed | M | ❄️ congelada (legado 10% + alimento 21–26% do prof; DoD não atingido, #13/#15–16) |
 | 15 | Obstáculos e níveis | Pedras com colisão, 4 níveis, 11 sensores | M | ✅ concluída |
 
 > Estimativa de esforço: S = 1 sessão, M = 2-4, L = 4+.
 
 **Critério de conclusão (Definition of Done):**
 1. `teacher_influence = 0` de forma permanente. ✅
-2. ≥80% dos episódios: chegada à chuva E sem perigo (eval 100+ eps, multi-seed). ❌ **Melhor: 40% (PPO)**
+2. Legado: ≥80% chegada à chuva E sem perigo (eval 100+ eps, multi-seed). ❌ **Melhor: 40% (PPO)**.
+   Alimento (DoD relativo ≥80% do professor): ❌ **A 26% / B 21% (#15)**.
+   Teto do oráculo: A 66% / B 80% (#16) — DoD absoluto em B é loteria.
 3. Jogo roda em tempo real com métricas. ✅
 
 ---
@@ -128,15 +139,26 @@ O reward é por passo (200 passos/episódio), mas o agente precisa lembrar: "há
 - Usar `→` → não, usar `->` (ASCII)
 
 ### Arquivos importantes
-- `config.py` — todas as constantes
-- `mlp.py` — PolicyNetwork + CriticNetwork + REINFORCE/A2C/PPO
-- `main.py` — loop do jogo, currículo, HUD, editor
-- `perception.py` — sensores (17 features, Fase 12) + recompensa por progresso
+- `config.py` — todas as constantes (+ chaves alimento: `food_*`, `n_inputs_food`,
+  `epsilon_greedy`, `lambda_c`, `food_curriculum`)
+- `mlp.py` — PolicyNetwork + CriticNetwork + REINFORCE/A2C/PPO (+ whitening T6,
+  ε-greedy opt-in T6)
+- `main.py` — loop do jogo, currículo, HUD, editor (+ `FOOD_MODE` via `--maze=A/B`,
+  professor unimodal, CSV `encontro_food/passos_ate_comer/maze`)
+- `perception.py` — sensores legados 17-dim + modo alimento 11-dim (`FOOD_DIM`,
+  olfato, fome)
 - `worm.py` — corpo do verme (cabeça + segmentos)
-- `environment.py` — chuva/luz/fontes + randomização
+- `environment.py` — chuva/luz/fontes + randomização (+ `food_sources`,
+  `load_maze`, `eat_and_respawn`, currículo proximal T8)
 - `test_mlp.py` — 13 testes (gradientes, A2C, PPO, save/load)
-- `debug_sensores.py` — headless: contrato recompensa + casos-limite
-- `EXPERIMENTOS.md` — tabela de ciência (5 experimentos)
+- `debug_sensores.py` — headless legado (17-dim)
+- `debug_maze.py` / `debug_food.py` / `train_food_headless.py` — validador A≠B,
+  contrato alimento, treino/eval headless (`--teacher-only`, `--eval`,
+  `--weights/--save`, `--set`, `--epsilon`)
+- `labirintos.json` — A_treino ≠ B_teste (métrica de generalização)
+- `VIABILIDADE/PLANO_MUDANCAS` — reformulação alimento: incorporados à seção
+  F8 do `README.md` (documentos avulsos removidos na unificação 5→3).
+- `EXPERIMENTOS.md` — tabela de ciência (16 experimentos; #15–16 = Fase 14 alimento)
 - `PLANO_DE_MELHORIAS.md` — este arquivo
 - `episodios.csv` — métricas por episódio (gerado pelo jogo)
 - `pesos.json` — cérebro salvo (actor + critic)
@@ -145,6 +167,17 @@ O reward é por passo (200 passos/episódio), mas o agente precisa lembrar: "há
 ```bash
 # Treino com limite
 python main.py --episodes=100
+
+# Treino alimento no labirinto A com currículo (trilha atual)
+python main.py --maze=A --episodes=100 --set=food_curriculum=1 --set=epsilon_greedy=0.1 --set=lambda_c=0.05
+
+# Avaliacao oficial (labirinto B, nunca visto no treino)
+python main.py --eval --maze=B --episodes=100
+
+# Headless rápido (mesma pergunta-base, sem GUI)
+python train_food_headless.py --episodes=100 --maze=A --seed=42 --set=food_curriculum=1 --save=pesos_food.json
+python train_food_headless.py --episodes=100 --maze=B --seed=99 --eval --weights=pesos_food.json
+python train_food_headless.py --episodes=100 --maze=B --seed=99 --teacher-only  # teto do oráculo
 
 # Avaliacao (carrega pesos.json, sem treino)
 python main.py --eval --episodes=50
@@ -299,6 +332,13 @@ python -m py_compile config.py mlp.py main.py perception.py worm.py environment.
 - [x] Se <60%: considerar alternativas radicais (ver abaixo) — **CASO ATUAL**
 
 **Resultado 2026-09 (ver `EXPERIMENTOS.md #13`):** eval 100eps, 14/100 chegada>0, 10/100 seguro, entropia 0.000. DoD <60% → vale avaliar DQN/entorno simplificado/clonagem ou aceitar limitação do RL puro.
+
+**Trilha alimento — Fase 14 headless (ver `EXPERIMENTOS.md #15–16`):**
+treino 100eps maze A c/ currículo → eval 100eps: A **17%** (prof 66%), B **17%**
+(prof 80%). DoD relativo (≥80% do professor): A 26% / B 21% — **NÃO atingido**,
+política = acaso. Teto do professor oscila (B 60–80%): DoD absoluto em B é
+loteria; usar DoD relativo. Fixes travados: whitening + `epsilon_greedy` +
+`lambda_c` opt-in + currículo de distância (`food_curriculum`).
 
 **Alternativas se DoD não for atingido:**
 1. **DQN com ε-greedy**: off-policy puro, replay buffer nativo

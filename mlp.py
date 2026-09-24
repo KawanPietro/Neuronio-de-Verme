@@ -622,7 +622,20 @@ class PolicyNetwork(MLP):
         return probs
 
     def sample_action(self, inputs, temperature=None):
-        """Amostra uma ação da distribuição π (exploração estocástica)."""
+        """Amostra uma ação da distribuição π (exploração estocástica).
+
+        T6 (opt-in, padrão desligado): CONFIG['epsilon_greedy'] > 0 força ação
+        uniforme com prob ε — piso de exploração desacoplado da entropia, que
+        colapsa a 0 e não se recupera sozinha (exps #8–#14, T5).
+        """
+        eps = 0.0
+        try:
+            eps = float(CONFIG.get('epsilon_greedy', 0.0) or 0.0)
+        except Exception:
+            eps = 0.0
+        if eps > 0 and random.random() < eps:
+            self.probabilities(inputs, temperature)  # mantém last_probs p/ logs
+            return random.randrange(self.n_actions)
         probs = self.probabilities(inputs, temperature)
         r = random.random()
         acc = 0.0
@@ -879,8 +892,17 @@ class PolicyNetwork(MLP):
             # GAE advantage
             advantages = compute_gae(scaled_rewards, values, gamma, gae_lambda)
 
-            # Retornos para o critic loss: G_t = A_t + V(s_t)
+            # Retornos para o critic loss: G_t = A_t + V(s_t) (usa advantage CRU)
             returns = [a + v for a, v in zip(advantages, values)]
+
+            # T6: whitening conservador do advantage do ACTOR (estabiliza PPO/A2C).
+            # Divide por max(1, std): doma updates gigantes (reward_scale×200 passos)
+            # sem amplificar episódios de sinal pequeno. Critic usa returns crus.
+            _m = sum(advantages) / max(1, len(advantages))
+            _v = sum((_a - _m) ** 2 for _a in advantages) / max(1, len(advantages))
+            _s = math.sqrt(_v + 1e-8)
+            _den = _s if _s > 1.0 else 1.0
+            advantages = [(_a - _m) / _den for _a in advantages]
 
             # PPO (Fase 9): coleta π_old(a|s) antes do update
             old_probs_list = None

@@ -19,6 +19,7 @@ Uma simulação 3D educativa em Python que usa **redes neurais** e **aprendizado
   - [3. O ciclo de aprendizagem](#3-o-ciclo-de-aprendizagem)
 - [Aprendizado por reforço na prática](#-aprendizado-por-refoço-na-prática)
 - [Aprendizado por currículo (Curriculum Learning)](#-aprendizado-por-currículo-curriculum-learning)
+- [Reformulação alimento + labirintos (F8)](#-reformulação-alimento--labirintos-f8)
 - [A demonstração `DiaNoite.py`](#-a-demonstração-dianoitepy)
 - [Observações e limitações](#-observações-e-limitações)
 - [Estado atual e guia de estudo](#️-estado-atual-e-guia-de-estudo-para-o-grupo)
@@ -58,20 +59,25 @@ Douglas Adams estaria orgulhoso: o verme tem sensores de **fotorecepção** (luz
 
 ```
 Neuronio-de-Verme/
-├── main.py              # Ponto de entrada: orquestra câmera, editor, update e input
-├── config.py            # Todas as constantes em um dicionário CONFIG
-├── perception.py        # Contrato de comportamento: sensores 17-dim (Fase 12) + recompensa por progresso
-├── mlp.py               # MLP + Policy/Critic + PPO/A2C + Replay Buffer (softmax, 5 ações)
+├── main.py              # Ponto de entrada: orquestra câmera, editor, update e input (+FOOD_MODE via --maze)
+├── config.py            # Todas as constantes em um dicionário CONFIG (+ chaves food_*, epsilon_greedy, lambda_c)
+├── perception.py        # Contrato legado 17-dim + modo alimento 11-dim (FOOD_DIM, olfato, fome)
+├── mlp.py               # MLP + Policy/Critic + PPO/A2C + Replay Buffer (softmax, 5 ações) (+ whitening, ε-greedy opt-in)
 ├── test_mlp.py          # 15 testes: gradientes, REINFORCE, A2C, PPO, buffer, save/load
 ├── Rede_Neural.py       # Cérebro LEGADO (Fase 1, Hebbian-like) — referência didática
 ├── worm.py              # O corpo do verme (cabeça + segmentos + animação + colisão)
-├── environment.py       # Fontes de luz/chuva + obstáculos/muros + partículas de chuva
+├── environment.py       # Fontes de luz/chuva/alimento + obstáculos/muros + load_maze + eat_and_respawn
 ├── debug_sensores.py    # Debug headless do contrato (sensores 17-dim + recompensa por passo)
+├── debug_maze.py        # Validador headless dos labirintos (BFS spawn→food, A≠B)
+├── debug_food.py        # Debug headless do modo alimento (contrato 11-dim + fome + comer)
+├── train_food_headless.py # Treino/eval headless do alimento (PPO real, sem GUI: --eval, --weights/--save, --teacher-only)
 ├── Verme.py             # Shim de compatibilidade (executa main.py)
 ├── DiaNoite.py          # Demonstração separada: ciclo de dia/noite
 ├── Instalar Ursina.py   # Script de teste rápido para verificar se o Ursina funciona
 ├── episodios.csv        # Curva de aprendizado por episódio (gerado pelo jogo)
 ├── pesos.json           # Cérebro salvo (teclas S/L, ou fim de --eval)
+├── pesos_food_A100.json # Cérebro 11-dim da Fase 14 alimento (treino headless 100eps maze A)
+├── labirintos.json      # Labirinto A_treino ≠ B_teste (métrica de generalização)
 ├── EXPERIMENTOS.md      # Tabela de ciência: o que mudou, o que aconteceu, conclusão
 ├── requirements.txt     # Dependência: ursina
 └── README.md            # Este documento
@@ -359,6 +365,49 @@ O CSV (`episodios.csv`) registra por episódio: `estagio, recompensa_*, retorno,
 
 ---
 
+## 🔄 Reformulação alimento + labirintos (F8)
+
+> Pergunta-base: **"Quantas épocas de treinamento são necessárias para alcançar
+> o alimento no menor tempo possível?"** A trilha legada (luz/chuva) continua
+> intacta por padrão; o modo alimento ativa com `--maze=A/B`.
+
+**Por que trocar luz+chuva por alimento:** o objetivo duplo (aproximar chuva +
+evitar luz) gerava gradientes conflitantes que travavam os exps #12–#14 em
+10–12%. O objetivo único (só atrair) elimina metade da variância — e nada em
+`mlp.py`/`worm.py` precisou mudar (agnósticos à semântica).
+
+| # | Ideia | Efeito | Custo |
+|---|-------|--------|-------|
+| E1 | **Objetivo único** (só atrair) | Remove o conflito `+chuva/−luz` | Zero |
+| E2 | **Comer e reaparecer** (`eat_and_respawn`) | 3–5 encontros/ep em vez de 0–1 (sinal denso) | S |
+| E3 | **Olfato** (`smell = 1/(1+dist)`) | Gradiente contínuo mesmo longe (quimiotaxia) | S |
+| E4 | **Fome** (`hunger 0→1`, zera ao comer, multiplica `r`) | Quebra o ótimo "ficar parado" | S |
+| E5 | **Labirinto como métrica** (treino A ≠ teste B) | Mede generalização, não decoreba | M |
+| E6 | **Tempo-até-comer** como métrica primária | Curva contínua (`passos_ate_comer`) em vez de binária | S |
+
+Adiado de propósito: veneno/predador, multi-alimento, alimento móvel, RNN,
+multi-verme (só após o DoD do básico).
+
+**Estado 11-dim** (`FOOD_DIM`): `food_dir.x/z, food_dist, smell` + `obs_dir.x/z,
+obs_dist` + `vel_x/z, borda_x/z`. **Recompensa unimodal** por passo (clip
+`[-1,1]`): progresso + `smell` + bônus ao comer/permanecer + obstáculos
+(Fase 15), tudo × `(1 + hunger_gain·hunger)`. Professor: só atração +
+bordas + muros. Fixes travados: whitening do advantage, `epsilon_greedy` e
+`lambda_c` opt-in, currículo de distância (`food_curriculum`: nasce perto,
+afasta `+0.15`/ep).
+
+**Labirintos** (`labirintos.json`, `map_limit=16`): **A_treino** (corredor em S,
+2 muros) e **B_teste** (corredor em Z + muro extra). Protocolo: treina só em A,
+avalia sempre em B (`python main.py --eval --maze=B --episodes=100`, ou rápido
+sem GUI via `train_food_headless.py --eval --weights=...`).
+
+**Resultado (congelado, `EXPERIMENTOS.md #15–16`):** treino 100eps em A →
+eval A **17%** (teto do professor 66%), eval B **17%** (teto 80%). DoD relativo
+(≥80% do professor): A 26% / B 21% — **não atingido**; o oráculo oscila
+(B 60–80%), então DoD absoluto em B é loteria.
+
+---
+
 ## 🌅 A demonstração `DiaNoite.py`
 
 Um mini-projeto **separado** (não integrado ao `Verme.py`) que simula o ciclo do dia com um sol arcando no céu (0° a 360°), dividido em 4 fases:
@@ -391,7 +440,9 @@ Analisando o código, alguns pontos merecem atenção para quem for continuar o 
 
 ## 🗺️ Estado atual e guia de estudo (para o grupo)
 
-**Onde estamos (Fase 12 concluída — código):** estado 17-dim + rede `17→32→16→5` + PPO/A2C + obstáculos/muros.
+**Onde estamos (❄️ congelado 2026-09-24):** trilha legada 17-dim + trilha alimento
+11-dim (`--maze=A/B`, `labirintos.json`) + PPO/A2C + fixes (whitening, ε-greedy,
+λc e currículo de distância opt-in). DoD não atingido em nenhuma trilha.
 
 | Fase | O que foi | Status | Como ver no código |
 |------|-----------|--------|-------------------|
@@ -402,7 +453,8 @@ Analisando o código, alguns pontos merecem atenção para quem for continuar o 
 | 12 | Estado 17-dim (vel/borda/ângulos) | ✅ código | `perception.py: get_sensor_inputs`, `config.py: n_inputs=17` |
 | 13 | Replay Buffer off-policy | ✅ código | `mlp.py: ReplayBuffer/ppo_update_from_buffer` |
 | 15 | Obstáculos/muros + 4 níveis + colisão | ✅ | `environment.py: randomize_obstacles`, tecla `O` |
-| 14 | Avaliação DoD ≥80% | ⚠️ parcial (10/100 seguro, DoD não atingido) | Ver `EXPERIMENTOS.md #13`; multi-seed 500+ eps pendente |
+| 14 | Avaliação DoD ≥80% | ❄️ congelada (legado 10%; alimento 21–26% do prof) | `EXPERIMENTOS.md #13/#15–16`; teto do oráculo A66/B80 |
+| F8 | Reformulação alimento + labirintos + currículo | ✅ | Ver seção F8 acima; `train_food_headless.py`, `debug_maze.py`, `debug_food.py` |
 
 **Roteiro de estudo (30 min para apresentar):**
 1. `python test_mlp.py` — prova que o backprop está certo (5 min).

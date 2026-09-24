@@ -11,6 +11,7 @@ from environment import Environment
 from mlp import (ACTIONS, PolicyNetwork, CriticNetwork, entropy, save_brain,
                   load_brain, ReplayBuffer, compute_gae)
 from perception import calculate_reward, get_sensor_inputs
+from perception import calculate_food_reward, get_food_sensor_inputs
 from worm import Worm
 
 app = Ursina()
@@ -22,13 +23,20 @@ app = Ursina()
 #   --episodes=N    → roda N episódios e fecha (treino ou eval)
 #   --difficulty=N  → 0 LIVRE / 1 FACIL / 2 MEDIO / 3 DIFICIL  (alias para --set=difficulty)
 #   --set k=v       → sobrescreve CONFIG (tabela de experimentos)
+#   --maze=A/B       → modo alimento + labirinto (A treino, B teste oficial)
+#                     Lean: feature flag — legado luz/chuva intacto por padrão,
+#                     decide a remoção total o mais tarde possível (só após DoD).
 EVAL_MODE = '--eval' in sys.argv
 VISUAL_MODE = '--visual' in sys.argv
 EVAL_EPISODES = None
+MAZE_NAME = None  # Lean MVP: None = legado; 'A'/'B' = alimento + labirinto
 NUM_SEEDS = 1
 for _arg in sys.argv:
     if _arg.startswith('--episodes='):
         EVAL_EPISODES = int(_arg.split('=')[1])
+    elif _arg.startswith('--maze='):
+        MAZE_NAME = _arg.split('=', 1)[1]
+        print(f"  MAZE = {MAZE_NAME} (modo alimento)")
     elif _arg.startswith('--seeds='):
         NUM_SEEDS = int(_arg.split('=')[1])
     elif _arg.startswith('--difficulty='):
@@ -44,6 +52,12 @@ for _arg in sys.argv:
         print(f"  CONFIG['{key}'] = {CONFIG[key]}")
 
 random.seed(CONFIG['seed'])  # execução reproduzível
+
+# Lean: decidir tarde — FOOD_MODE só quando --maze presente (evita migração big-bang)
+FOOD_MODE = MAZE_NAME is not None
+N_INPUTS_ACTIVE = CONFIG.get('n_inputs_food', 11) if FOOD_MODE else CONFIG['n_inputs']
+if FOOD_MODE:
+    print(f"  MODO ALIMENTO 11-dim (labirinto {MAZE_NAME}); pesos 17-dim incompatíveis serão ignorados")
 
 # ─── ILUMINAÇÃO ───────────────────────────────────────────────────────────────
 DirectionalLight(y=2, z=-1)
@@ -78,10 +92,22 @@ ground_collider = Entity(
 
 # ─── AMBIENTE (FONTES DE LUZ E CHUVA + OBSTÁCULOS) ────────────────────────────
 env = Environment()
-env.place_light(Vec3(10, 1, 10))
-env.place_rain(Vec3(-10, 1, -10))
-if CONFIG['difficulty'] > 0:
-    env.randomize_obstacles(difficulty=CONFIG['difficulty'])
+if FOOD_MODE:
+    # Lean MVP: labirinto manda (muros ficam); nada de luz/chuva/partículas
+    _maze_info = env.load_maze(MAZE_NAME, CONFIG.get('maze_file', 'labirintos.json'))
+    MAZE_SPAWN = _maze_info['spawn']
+    # T8: episódio 0 já respeita o currículo (perto do spawn se ligado)
+    try:
+        _d0 = env.food_max_dist(0)
+        env.randomize_food_near(MAZE_SPAWN.x, MAZE_SPAWN.z, _d0, n_foods=1)
+    except Exception:
+        pass
+else:
+    env.place_light(Vec3(10, 1, 10))
+    env.place_rain(Vec3(-10, 1, -10))
+    MAZE_SPAWN = None
+    if CONFIG['difficulty'] > 0:
+        env.randomize_obstacles(difficulty=CONFIG['difficulty'])
 
 # ─── VERME ────────────────────────────────────────────────────────────────────
 worm = Worm()
@@ -103,8 +129,9 @@ camera.position = (0, 40, -85)
 camera.rotation = (24, 0, 0)
 
 # ─── CÉREBRO: política estocástica (17 → 32 → 16 → 5 ações, Fase 12) ───────
+# Lean: dimensão ativa (17 legado / 11 alimento); load_brain já descarta incompatível
 brain = PolicyNetwork(
-    CONFIG['n_inputs'],
+    N_INPUTS_ACTIVE,
     CONFIG['n_hidden'],
     CONFIG['n_actions'],
     temperature=CONFIG['temperature'],
@@ -113,7 +140,7 @@ brain = PolicyNetwork(
 
 # ─── CRÍTICO (Fase 8 — A2C): V(s) 17 → 32 → 16 → 1 (Fase 12) ──────────────
 critic = CriticNetwork(
-    CONFIG['n_inputs'],
+    N_INPUTS_ACTIVE,
     CONFIG['n_hidden'],
     n_hidden2=CONFIG.get('n_hidden2'),
 )
@@ -148,8 +175,13 @@ state = {
     'pulse_timer'     : 0.0,
     'prev_dist_light' : None,
     'prev_dist_rain'  : None,
+    'prev_dist_food'  : None,  # Lean alimento (só usado em FOOD_MODE)
     'prev_dist_obs'   : None,
     'prev_position'   : None,
+    'hunger'          : 0.0,   # E4: 0 saciado → 1 faminto; zera ao comer
+    'hunger_rate'     : CONFIG.get('hunger_rate', 0.002),
+    'encontros_food'  : 0,     # nº de vezes que comeu no episódio
+    'passos_ate_comer': None,  # passo do 1º encontro (métrica primária E6)
     'steps_in_obstacle': 0,  # Fase 15
     'difficulty'      : CONFIG['difficulty'],
     'episode'         : [],     # (sensors, action, reward, acao_professor) — Fases 3/4
@@ -165,12 +197,16 @@ if EVAL_MODE or VISUAL_MODE:
     state['force_autonomy'] = True
 
 # ─── LOG DE EPISÓDIOS (curva de aprendizado, critério de aceite da Fase 3/4) ─
+# Lean: entrega rápida — mantém 15 colunas legadas + 3 novas no fim (compat).
+# Pergunta-base usa encontro_food/passos_ate_comer/maze; chegada_chuva em
+# FOOD_MODE espelha encontro (compat com scripts antigos).
 log_csv = open(CONFIG['log_csv'], 'w', newline='')
 csv_writer = csv.writer(log_csv)
 csv_writer.writerow(['episodio', 'estagio', 'recompensa_total', 'recompensa_media',
                      'retorno_medio', 'entropia_media', 'learning_rate',
                      'lambda_imitacao', 'autonomia_forcada',
-                     'chegada_chuva', 'perigo_luz', 'colisao_obs', 'acao_principal', 'semente', 'dificuldade'])
+                     'chegada_chuva', 'perigo_luz', 'colisao_obs', 'acao_principal', 'semente', 'dificuldade',
+                     'encontro_food', 'passos_ate_comer', 'maze'])
 
 # ─── HUD (Fase 5) ─────────────────────────────────────────────────────────────
 hud = Text(
@@ -244,8 +280,21 @@ def get_target_direction():
     # ── Fuga das bordas (anti-encalhe, Fase 6) ────────────────────────────────
     # Se o verme estiver perto de uma parede, o professor empurra de volta para
     # o centro — evita ficar "engessado" contra o limite do mapa.
+    _add_edge_avoidance(combined)
+
+    # ── Desvio de obstáculos (Fase 15) — professor contorna a pedra
+    _add_obstacle_avoidance(combined)
+
+    if Vec3(combined).length() > 0.01:
+        return Vec3(combined).normalized()
+
+    return worm.direction
+
+
+def _add_edge_avoidance(combined):
+    """Lean: trecho compartilhado legado/alimento (evita duplicar 15 linhas)."""
     margin = CONFIG['wall_margin']
-    limit  = CONFIG['map_limit']
+    limit = CONFIG['map_limit']
     p = worm.head.position
     if p.x < -limit + margin:
         combined += Vec3(1, 0, 0) * (1.0 + (-limit + margin - p.x) / margin)
@@ -256,22 +305,59 @@ def get_target_direction():
     if p.z > limit - margin:
         combined += Vec3(0, 0, -1) * (1.0 + (p.z - (limit - margin)) / margin)
 
-    # ── Desvio de obstáculos (Fase 15) — professor contorna a pedra
+
+def _add_obstacle_avoidance(combined):
+    """Lean: trecho compartilhado legado/alimento (contorno de pedras/muros)."""
     for obs in getattr(env, 'obstacles', []):
         to_obs = obs.position - worm.head.position
         d = to_obs.length()
         avoid_r = CONFIG['obstacle_radius'] * 2.2
         if 0.1 < d < avoid_r:
-            # Repulsão proporcional + componente lateral para contornar
             away = (worm.head.position - obs.position).normalized()
             lateral = Vec3(away.z, 0, -away.x)  # tangente para contornar
             weight = (avoid_r - d) / avoid_r
             combined += away * weight * 1.4 + lateral * weight * 0.6
 
+
+def get_food_target_direction():
+    """Lean MVP: professor unimodal — só atração ao alimento + bordas + muros.
+
+    Sem repulsão de luz (E1). Reusa _add_edge/obstacle para não duplicar código.
+    """
+    combined = Vec3(0, 0, 0)
+    foods = getattr(env, 'food_sources', []) or getattr(env, 'rain_sources', [])
+    for fs in foods:
+        to_food = fs.position - worm.head.position
+        dist = to_food.length()
+        if dist > 0.01:
+            weight = max(0.0, 1.0 - (dist / CONFIG['sensor_max_dist']))
+            combined += to_food.normalized() * weight
+    _add_edge_avoidance(combined)
+    _add_obstacle_avoidance(combined)
     if Vec3(combined).length() > 0.01:
         return Vec3(combined).normalized()
-
     return worm.direction
+
+
+def get_sensors():
+    """Lean dispatch: 11-dim alimento em FOOD_MODE, 17-dim legado senão."""
+    if FOOD_MODE:
+        return get_food_sensor_inputs(worm, env, state)
+    return get_sensor_inputs(worm, env, state)
+
+
+def get_step_reward():
+    """Lean dispatch de recompensa (mantém legado intacto por padrão)."""
+    if FOOD_MODE:
+        return calculate_food_reward(worm, env, state)
+    return calculate_reward(worm, env, state)
+
+
+def get_teacher_dir():
+    """Lean dispatch do professor."""
+    if FOOD_MODE:
+        return get_food_target_direction()
+    return get_target_direction()
 
 
 # ─── CURRÍCULO DE AUTONOMIA (Fase 4) ─────────────────────────────────────────
@@ -297,12 +383,16 @@ def lambda_imitation():
     if stage == 'B':
         k = state['episode_count'] - CONFIG['stage_a_episodes']
         return CONFIG['lambda_start'] * (CONFIG['lambda_decay'] ** k)
+    if stage == 'C':
+        # T7 DAGGER-âncora (opt-in, padrão 0=legado): micro-peso do professor
+        # impede a deriva total da política sem custo de exploração extra.
+        return float(CONFIG.get('lambda_c', 0.0) or 0.0)
     return 0.0
 
 
 def teacher_action():
     """A ação discreta ideal do professor — alvo da imitação (CE)."""
-    target_dir = get_target_direction()
+    target_dir = get_teacher_dir()  # Lean: legado ou alimento conforme FOOD_MODE
     desired = signed_angle(worm.direction, target_dir)
     max_turn = CONFIG['turn_rate'] * time.dt
     best, best_err = 0, float('inf')
@@ -438,6 +528,18 @@ def update_hud():
     stage = current_stage()
     ent = entropy(brain.last_probs) if brain.last_probs else 0.0
     lvl = CONFIG['difficulty_levels'].get(state['difficulty'], CONFIG['difficulty_levels'][1])
+    if FOOD_MODE:
+        # Lean: HUD mínimo do alimento (maze + encontros, sem luz/chuva)
+        hud.text = (
+            f"episodio : {state['episode_count']}  maze:{MAZE_NAME}\n"
+            f"estagio  : {stage} ({STAGE_NAMES[stage]})\n"
+            f"encontros: {state['encontros_food']}  passos1o:{state['passos_ate_comer']}\n"
+            f"recompensa media (roll {len(rolling)}/{window}): {media:+.2f}\n"
+            f"entropia : {ent:.3f}  lr:{brain.learning_rate:.5f}  temp:{brain.temperature:.3f}\n"
+            f"professor: {'desligado' if state['force_autonomy'] else 'ligado'}  "
+            f"modo:{'AVALIACAO' if EVAL_MODE else 'TREINO'}"
+        )
+        return
     hud.text = (
         f"episodio : {state['episode_count']}\n"
         f"estagio  : {stage} ({STAGE_NAMES[stage]})\n"
@@ -482,8 +584,12 @@ def reset():
         'pulse_timer'     : 0.0,
         'prev_dist_light' : None,
         'prev_dist_rain'  : None,
+        'prev_dist_food'  : None,
         'prev_dist_obs'   : None,
         'prev_position'   : None,
+        'hunger'          : 0.0,
+        'encontros_food'  : 0,
+        'passos_ate_comer': None,
         'episode'         : [],
         'episode_count'   : 0,
         'steps_in_rain'   : 0,
@@ -582,12 +688,27 @@ def finish_episode():
         ACTIONS[principal],
         CONFIG['seed'],
         state['difficulty'],
+        # Lean: novas colunas (0 em modo legado); chegada_chuva espelha encontro em FOOD_MODE
+        state['encontros_food'] if FOOD_MODE else 0,
+        state['passos_ate_comer'] if state['passos_ate_comer'] is not None else '',
+        MAZE_NAME if MAZE_NAME else '',
     ])
     log_csv.flush()
 
     actions = ' '.join(f"{ACTIONS[a][:6]}:{c}" for a, c in enumerate(stats['action_counts']))
     lvl = CONFIG['difficulty_levels'][state['difficulty']]['label']
-    print(
+    if FOOD_MODE:
+        print(
+            f"\n-- Episodio {state['episode_count']} [estagio {stage}: {STAGE_NAMES[stage]}][maze:{MAZE_NAME}] -----\n"
+            f"  total={total:+.1f}  media={stats['mean_reward']:+.4f}  "
+            f"entropia={stats['mean_entropy']:.3f}  lr={brain.learning_rate:.5f}\n"
+            f"  encontros_food={state['encontros_food']}  "
+            f"passos_ate_comer={state['passos_ate_comer']}  "
+            f"colisao_obs={state['steps_in_obstacle']/h:.2f}\n"
+            f"  acoes: {actions}\n"
+        )
+    else:
+        print(
         f"\n-- Episodio {state['episode_count']} [estagio {stage}: {STAGE_NAMES[stage]}][{lvl}] -----\n"
         f"  total={total:+.1f}  media={stats['mean_reward']:+.4f}  "
         f"entropia={stats['mean_entropy']:.3f}  lr={brain.learning_rate:.5f}\n"
@@ -602,18 +723,34 @@ def finish_episode():
         print(f"\n-- Concluido ({EVAL_EPISODES} episodios): pesos salvos em {CONFIG['weights_file']}")
         quit()
 
-    env.randomize_sources()
-    if CONFIG['difficulty'] > 0:
-        env.randomize_obstacles(difficulty=state['difficulty'])
-    worm.reset()
-    lim = max(6, CONFIG['map_limit'] - 6)
-    worm.head.position = Vec3(random.uniform(-lim, lim), CONFIG['segment_size'] / 2, random.uniform(-lim, lim))
+    if FOOD_MODE:
+        # Lean: NUNCA randomize_sources/obstacles aqui (destruiria o labirinto).
+        # T8: alimento a até schedule(ep) do spawn (perto→longe); desligado=legado.
+        _maxd = env.food_max_dist(state['episode_count'])
+        try:
+            env.randomize_food_near(MAZE_SPAWN.x, MAZE_SPAWN.z, _maxd, n_foods=1)
+        except Exception:
+            env.randomize_food(n_foods=1, limit=CONFIG.get('food_limit', 12))
+        worm.reset()
+        if MAZE_SPAWN is not None:
+            worm.head.position = Vec3(MAZE_SPAWN)
+    else:
+        env.randomize_sources()
+        if CONFIG['difficulty'] > 0:
+            env.randomize_obstacles(difficulty=state['difficulty'])
+        worm.reset()
+        lim = max(6, CONFIG['map_limit'] - 6)
+        worm.head.position = Vec3(random.uniform(-lim, lim), CONFIG['segment_size'] / 2, random.uniform(-lim, lim))
     state['episode'] = []
     state['steps_in_rain'] = 0
     state['steps_in_danger'] = 0
     state['steps_in_obstacle'] = 0
+    state['encontros_food'] = 0
+    state['passos_ate_comer'] = None
+    state['hunger'] = 0.0
     state['action_history'] = []
     state['prev_position'] = Vec3(worm.head.position)
+    state['prev_dist_food'] = None
     state['prev_dist_obs'] = None
 
 
@@ -636,7 +773,7 @@ def update():
     if held_keys['a']: cam_pivot.x -= CONFIG['cam']['pan_speed'] * time.dt
     if held_keys['d']: cam_pivot.x += CONFIG['cam']['pan_speed'] * time.dt
 
-    # ── Pulso de chuva ────────────────────────────────────────────────────────
+    # ── Pulso de chuva (legado; inútil em FOOD_MODE mas barato manter) ─────────
     state['pulse_timer'] += time.dt
     if state['pulse_timer'] > 0.3:
         state['pulse_timer'] = 0.0
@@ -644,11 +781,12 @@ def update():
     else:
         state['rain_pulse'] *= (1 - time.dt * 8)
 
-    # ── Partículas de chuva ───────────────────────────────────────────────────
-    env.update_rain_particles()
+    # ── Partículas de chuva (legado; puladas em FOOD_MODE — economia Lean) ────
+    if not FOOD_MODE:
+        env.update_rain_particles()
 
-    # ── Estado (17-dim, Fase 12) e amostragem de ação ──────────────────────────
-    sensors = get_sensor_inputs(worm, env, state)
+    # ── Estado (11-dim alimento / 17-dim legado) e amostragem ──────────────────
+    sensors = get_sensors()
     action = brain.sample_action(sensors)
 
 # ── Direção: currículo professor + política (curriculum learning) ────────
@@ -669,7 +807,7 @@ def update():
         autonomy = 1.0
 
     # Professor: vire em direção ao alvo (limitado à taxa máxima de giro)
-    teacher_dir = get_target_direction()
+    teacher_dir = get_teacher_dir()  # Lean dispatch (alimento ou legado)
     max_turn = CONFIG['turn_rate'] * time.dt
     teacher_turn = max(-max_turn, min(max_turn, signed_angle(worm.direction, teacher_dir)))
 
@@ -691,12 +829,36 @@ def update():
         state['log_timer'] += time.dt
         if state['log_timer'] >= CONFIG['log_interval']:
             state['log_timer'] = 0.0
-            print(f"aquario  acao={ACTIONS[action]:>14}  chuva_dist={_nearest_dist(worm.head.position, env.rain_sources) or 0:.1f}")
+            if FOOD_MODE:
+                print(f"aquario  acao={ACTIONS[action]:>14}  food_dist={_nearest_dist(worm.head.position, getattr(env, 'food_sources', [])) or 0:.1f}")
+            else:
+                print(f"aquario  acao={ACTIONS[action]:>14}  chuva_dist={_nearest_dist(worm.head.position, env.rain_sources) or 0:.1f}")
         update_hud_aquarium(action)
         return
 
     # ── Recompensa por passo e coleta do episódio (Fases 3/4) ─────────────────
-    reward = calculate_reward(worm, env, state)
+    reward = get_step_reward()
+
+    # ── Fome E4 + comer-e-reaparecer E2 (só FOOD_MODE; legado intacto) ─────────
+    # Lean: menor lote que responde à pergunta-base — encontro conta época aqui,
+    # sem novo sistema de eventos. hunger_rate pequeno evita saturar o clip.
+    if FOOD_MODE:
+        _d_food = _nearest_dist(worm.head.position, getattr(env, 'food_sources', []))
+        _fr = CONFIG.get('food_radius', 3.0)
+        if _d_food is not None and _d_food < _fr:
+            state['encontros_food'] += 1
+            if state['passos_ate_comer'] is None:
+                state['passos_ate_comer'] = len(state['episode']) + 1
+            state['hunger'] = 0.0
+            # T8: respawn mantém o schedule do episódio (perto→longe do worm)
+            _maxd_eat = env.food_max_dist(state['episode_count'])
+            env.eat_and_respawn(
+                min(env.food_sources,
+                    key=lambda s: (s.position - worm.head.position).length()),
+                limit=_maxd_eat,
+                near=(worm.head.position.x, worm.head.position.z))
+        else:
+            state['hunger'] = min(1.0, state['hunger'] + state['hunger_rate'])
 
     # ── Penalidade por repetição de ação (Fase 7: anti-colapso) ──────────────
     # Se o verme escolhe a mesma ação muitas vezes seguidas, penaliza para
@@ -713,12 +875,18 @@ def update():
     state['total_reward'] += reward
 
     # ── Métricas do episódio (critério de aceite da Fase 4) ───────────────────
-    dist_rain  = _nearest_dist(worm.head.position, env.rain_sources)
-    dist_light = _nearest_dist(worm.head.position, env.light_sources)
-    if dist_rain is not None and dist_rain < CONFIG['arrival_radius']:
-        state['steps_in_rain'] += 1
-    if dist_light is not None and dist_light < CONFIG['arrival_radius']:
-        state['steps_in_danger'] += 1
+    if FOOD_MODE:
+        # Lean: chegada_chuva espelha encontro p/ compat; métrica real vai p/ CSV novo
+        dist_food = _nearest_dist(worm.head.position, getattr(env, 'food_sources', []))
+        if dist_food is not None and dist_food < CONFIG.get('food_radius', 3.0):
+            state['steps_in_rain'] += 1
+    else:
+        dist_rain  = _nearest_dist(worm.head.position, env.rain_sources)
+        dist_light = _nearest_dist(worm.head.position, env.light_sources)
+        if dist_rain is not None and dist_rain < CONFIG['arrival_radius']:
+            state['steps_in_rain'] += 1
+        if dist_light is not None and dist_light < CONFIG['arrival_radius']:
+            state['steps_in_danger'] += 1
     # Fase 15: colisão com obstáculo
     dist_obs = _nearest_dist(worm.head.position, env.obstacles)
     if dist_obs is not None and dist_obs < CONFIG['obstacle_radius']:

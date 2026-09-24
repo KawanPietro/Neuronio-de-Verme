@@ -4,11 +4,12 @@ from ursina import *
 
 
 class Environment:
-    """Fontes editáveis (luz/chuva), obstáculos e o sistema de partículas de chuva."""
+    """Fontes editáveis (luz/chuva/alimento), obstáculos e partículas de chuva."""
 
     def __init__(self):
         self.light_sources = []
         self.rain_sources = []
+        self.food_sources = []  # Reformulacao alimento (E1/E2): reforçador único
         self.obstacles = []       # Fase 15: blocos físicos que exigem desvio
         self.rain_particles = []
 
@@ -36,6 +37,24 @@ class Environment:
         )
         self.rain_sources.append(src)
         self.rebuild_rain_particles()
+
+    def place_food(self, pos):
+        """Cria uma fonte de alimento (alvo único da reformulação)."""
+        src = Entity(
+            model='sphere',
+            color=color.lime.tint(-0.2),
+            scale=1.6,
+            position=Vec3(pos.x, 1, pos.z),
+            collider='box',
+        )
+        self.food_sources.append(src)
+        return src
+
+    def clear_food(self):
+        """Remove todos os alimentos."""
+        for src in list(self.food_sources):
+            destroy(src)
+        self.food_sources.clear()
 
     def place_obstacle(self, pos, scale=2.0):
         """Cria um obstáculo sólido (pedra) — Fase 15."""
@@ -82,6 +101,9 @@ class Environment:
             self.rain_sources.remove(entity)
             destroy(entity)
             self.rebuild_rain_particles()
+        elif entity in self.food_sources:
+            self.food_sources.remove(entity)
+            destroy(entity)
         elif entity in self.obstacles:
             self.obstacles.remove(entity)
             destroy(entity)
@@ -106,6 +128,114 @@ class Environment:
         for _ in range(n_rains):
             self.place_rain(Vec3(random.uniform(-limit, limit), 1, random.uniform(-limit, limit)))
 
+    def randomize_food(self, n_foods=1, limit=12):
+        """Reposiciona alimentos em lugares aleatórios livres (novo episódio)."""
+        for src in list(self.food_sources):
+            self.delete_source(src)
+        for _ in range(n_foods):
+            for _ in range(20):
+                x = random.uniform(-limit, limit)
+                z = random.uniform(-limit, limit)
+                ok = True
+                for obs in self.obstacles:
+                    if abs(obs.x - x) < 3.0 and abs(obs.z - z) < 3.0:
+                        ok = False
+                        break
+                if not ok:
+                    continue
+                self.place_food(Vec3(x, 1, z))
+                break
+
+    def food_max_dist(self, episode_count=None):
+        """T8: schedule do currículo (0/desligado = food_limit legado)."""
+        from config import CONFIG
+        if not CONFIG.get('food_curriculum', 0):
+            return CONFIG.get('food_limit', 12)
+        start = CONFIG.get('food_start_dist', 5.0)
+        growth = CONFIG.get('food_growth', 0.15)
+        ep = 0 if episode_count is None else episode_count
+        return min(CONFIG.get('food_limit', 12), start + growth * ep)
+
+    def randomize_food_near(self, cx, cz, max_dist, n_foods=1):
+        """T8: alimento a até max_dist de (cx,cz), livre de obstáculos.
+
+        Fallback: se 20 tentativas falharem (corredor estreito), usa
+        randomize_food legado em vez de travar o episódio (anti-defeito).
+        """
+        for src in list(self.food_sources):
+            self.delete_source(src)
+        import math as _math
+        from config import CONFIG as _CFG
+        _min_d = _CFG.get('food_radius', 3.0) + 1.0  # anti-sorte: nunca nasce já-comido
+        for _ in range(n_foods):
+            placed = False
+            for _ in range(20):
+                ang = random.uniform(0, 2 * _math.pi)
+                dist = random.uniform(_min_d, max(_min_d + 0.5, max_dist))
+                x, z = cx + _math.cos(ang) * dist, cz + _math.sin(ang) * dist
+                ok = True
+                for obs in self.obstacles:
+                    if abs(obs.x - x) < 3.0 and abs(obs.z - z) < 3.0:
+                        ok = False
+                        break
+                if not ok:
+                    continue
+                self.place_food(Vec3(x, 1, z))
+                placed = True
+                break
+            if not placed:
+                self.randomize_food(n_foods=1)
+                break
+
+    def eat_and_respawn(self, eaten, limit=12, near=None):
+        """E2: come o alimento e reaparece outro em ponto livre (sinal denso).
+
+        T8: se near=(x,z), respawna a até `limit` do ponto (currículo);
+        senão, uniforme legado.
+        """
+        if eaten in self.food_sources:
+            self.delete_source(eaten)
+        if near is not None:
+            self.randomize_food_near(near[0], near[1], limit, n_foods=1)
+        else:
+            self.randomize_food(n_foods=1, limit=limit)
+        return self.food_sources[0] if self.food_sources else None
+
+    def load_maze(self, name, maze_file='labirintos.json'):
+        """E5: carrega labirinto A_treino ou B_teste (treino != teste).
+
+        Aceita 'A'/'a_treino' e 'B'/'b_teste'. Limpa obstáculos + alimentos,
+        constrói muros/pedras e posiciona alimentos das food_zones.
+        Retorna {'spawn': Vec3, 'food_zones': [...]}.
+        """
+        import json
+        import os
+        aliases = {'a': 'a_treino', 'a_treino': 'a_treino',
+                   'b': 'b_teste', 'b_teste': 'b_teste'}
+        key = aliases.get(str(name).lower(), str(name).lower())
+        base = os.path.dirname(os.path.abspath(__file__))
+        path = maze_file if os.path.isabs(maze_file) else os.path.join(base, maze_file)
+        with open(path) as f:
+            data = json.load(f)
+        if key not in data:
+            raise ValueError(f"Labirinto '{name}' desconhecido (chaves: {list(data.keys())})")
+        maze = data[key]
+        self.clear_obstacles()
+        self.clear_food()
+        for w in maze.get('muros', []):
+            self.place_wall(Vec3(w['x'], 0, w['z']),
+                            length=w.get('length', 9.0),
+                            thickness=w.get('thickness', 1.4),
+                            angle=w.get('angle', 0))
+        for p in maze.get('pedras', []):
+            self.place_obstacle(Vec3(p['x'], 0, p['z']),
+                                scale=p.get('scale', 1.8))
+        for fz in maze.get('food_zones', []):
+            self.place_food(Vec3(fz[0], 1, fz[2]))
+        spawn = maze.get('spawn', [0, 1.25, -12])
+        return {'spawn': Vec3(spawn[0], spawn[1], spawn[2]),
+                'food_zones': list(maze.get('food_zones', []))}
+
     def randomize_obstacles(self, difficulty=1):
         """Gera obstáculos conforme o nível de dificuldade — Fase 15+."""
         from config import CONFIG
@@ -123,7 +253,7 @@ class Environment:
                 if abs(x) < 3 and abs(z) < 3:
                     continue
                 ok = True
-                for src in self.light_sources + self.rain_sources:
+                for src in self.light_sources + self.rain_sources + self.food_sources:
                     if abs(src.x - x) < 3.5 and abs(src.z - z) < 3.5:
                         ok = False
                         break
@@ -150,7 +280,7 @@ class Environment:
                 if abs(x) < 7 and abs(z) < 7 and angle in (0, 90):
                     continue
                 ok = True
-                for src in self.light_sources + self.rain_sources:
+                for src in self.light_sources + self.rain_sources + self.food_sources:
                     if abs(src.x - x) < 4.5 and abs(src.z - z) < 4.5:
                         ok = False
                         break

@@ -32,6 +32,26 @@ CONFIG = {
     'proximity_rain_bonus'  : 0.3,  # Bônus proporcional a 1/dist para chuva
     'proximity_light_penalty': 0.3, # Penalidade proporcional a 1/dist para luz
 
+    # ── Alimento (reformulação E1-E4, aditivo: legado luz/chuva intacto) ──────
+    # Objetivo único: encontrar alimento. Chaves novas; n_inputs legado (17)
+    # mantido até T4 migrar main.py. n_inputs_food é o alvo (11-dim).
+    'food_radius'       : 3.0,   # Raio de "comeu" (menor que arrival 7: precisa chegar perto)
+    'eat_bonus'         : 5.0,   # Bônus ao cruzar food_radius (equivale ao arrival_bonus)
+    'inside_food_reward': 0.5,   # Recompensa por permanecer sobre o alimento
+    'smell_bonus'       : 0.3,   # Olfato E3: smell=1/(1+dist), bônus contínuo
+    'hunger_gain'       : 0.5,   # E4: r *= (1 + hunger_gain*hunger); hunger 0→1
+    'hunger_rate'       : 0.002, # Incremento de fome por passo (200 passos ≈ 0.4)
+    'n_inputs_food'     : 11,    # 4 food + 3 obs + 4 propriocepção (alvo T4)
+    'maze_file'         : 'labirintos.json',  # E5: labirintos treino/teste
+    'maze_default'      : 'A',   # Treino padrão; avaliação oficial usa 'B'
+    'food_limit'        : 12,    # Limite de respawn do alimento (labirinto 16)
+    # ── Currículo de distância T8 (Lean: barato e decisivo) ─────────────────
+    # Alimento nasce perto e afasta aos poucos: max_d(ep) = start + growth*ep.
+    # 0/desligado = legado (uniforme em food_limit). Via --set sem editar código.
+    'food_start_dist'   : 5.0,   # distância máx inicial do spawn/worm
+    'food_growth'       : 0.15,  # + por episódio (≈12 em ~47eps com start 5)
+    'food_curriculum'   : 0,     # 0=desligado (legado); 1=ligado
+
     # ── Penalidade por repetição de ação (Fase 7) ────────────────────────────
     # Quebra o colapso da política: se o verme escolhe a mesma ação muitas
     # vezes seguidas, sofre uma penalidade crescente — incentiva alternância.
@@ -66,6 +86,7 @@ CONFIG = {
     # ── Política estocástica (Fase 2) ────────────────────────────────────────
     'temperature'      : 1.0,   # Temperatura do softmax (exploração)
     'entropy_coef'     : 0.05,  # Peso do bônus de entropia — Fase 7: 5x maior (anti-colapso)
+    'epsilon_greedy'   : 0.0,   # T6: piso de exploração opt-in (0=legado). Food runs usam 0.1 via --set.
     'turn_rate'        : 1.05,  # Taxa de giro máxima (rad/s) ≈ 60°/s
                                 # ações: {−θ, −θ/2, 0, +θ/2, +θ}
 
@@ -101,6 +122,7 @@ CONFIG = {
     'stage_b_episodes' : 20,   # Quantos episódios híbridos (autonomia sobe 0→1)
     'lambda_start'     : 0.5,  # Peso inicial da imitação (CE) no híbrido
     'lambda_decay'     : 0.95, # Decaimento de λ a cada episódio (→ 0 no C)
+    'lambda_c'         : 0.0,  # T7 DAGGER-âncora opt-in (0=legado). Food: 0.05 via --set.
 
     # ── Métricas, memória e visualização (Fase 5) ────────────────────────────
     'seed'             : 42,    # Semente global de aleatoriedade (reproduzível)

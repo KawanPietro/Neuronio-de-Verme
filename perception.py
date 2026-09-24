@@ -228,3 +228,139 @@ def calculate_reward(worm, env, state) -> float:
     state['prev_position']   = Vec3(worm.head.position)
 
     return max(-1.0, min(1.0, reward))
+
+
+# ─── MODO ALIMENTO 11-DIM (reformulação E1-E4, aditivo) ───────────────────────
+#
+# Legado 17-dim acima permanece INTACTO até T4 migrar main.py — isso evita
+# quebrar treino atual, debug_sensores.py e pesos existentes.
+#
+#   índice | feature     | significado
+#   -------+-------------+--------------------------------------------
+#   0      | food_dir.x  | vetor XZ unitário até o alimento mais próximo
+#   1      | food_dir.z  | (0, 0) se não houver alimento
+#   2      | food_dist   | distância normalizada [0,1]
+#   3      | smell       | olfato 1/(1+dist) em [0,1] (E3, denso mesmo longe)
+#   4      | obs_dir.x   | vetor XZ unitário até o obstáculo mais próximo
+#   5      | obs_dir.z   | (0, 0) se não houver obstáculo
+#   6      | obs_dist    | distância normalizada [0,1]
+#   7      | vel_x       | direção atual X (propriocepção, [-1,1])
+#   8      | vel_z       | direção atual Z (propriocepção, [-1,1])
+#   9      | borda_x     | distância à borda X [0,1] (1=centro, 0=parede)
+#   10     | borda_z     | distância à borda Z [0,1]
+#
+# Armadilhas evitadas:
+# - usa state.get() em tudo novo (main.py legado não tem 'hunger'/'prev_dist_food')
+# - NÃO incrementa fome aqui (efeito colateral seria invisível); T4 incrementa
+#   no main e zera ao comer. Aqui só LÊ hunger como multiplicador.
+
+FOOD_DIM = 11
+
+
+def _food_sources(env):
+    """Fontes de alimento; fallback p/ rain_sources na transição (testes)."""
+    foods = list(getattr(env, 'food_sources', []) or [])
+    if not foods:
+        # Compat transição: permite testar modo alimento sem load_maze
+        foods = list(getattr(env, 'rain_sources', []) or [])
+    return foods
+
+
+def get_food_sensor_inputs(worm, env, state) -> list:
+    """Estado 11-dim do modo alimento (todos normalizados)."""
+    max_dist = CONFIG['sensor_max_dist']
+    limit = CONFIG.get('map_limit', 32)
+    features = [0.0] * FOOD_DIM
+
+    direction = getattr(worm, 'direction', None)
+    if direction is None:
+        dir_x, dir_z = 0.0, 1.0
+    else:
+        dir_x, dir_z = direction.x, direction.z
+
+    # ── Alimento + olfato ──────────────────────────────────────────────────
+    food_src, dist_food = _nearest(worm, _food_sources(env))
+    if food_src is not None:
+        to_food = food_src.position - worm.head.position
+        dx, dz = _xz_unit(to_food)
+        features[0] = dx
+        features[1] = dz
+        features[2] = min(dist_food / max_dist, 1.0)
+        features[3] = 1.0 / (1.0 + dist_food)  # E3: denso, [0,1]
+
+    # ── Obstáculo (mesmo contrato Fase 15) ─────────────────────────────────
+    obs_src, dist_obs = _nearest(worm, getattr(env, 'obstacles', []))
+    if obs_src is not None:
+        to_obs = obs_src.position - worm.head.position
+        dx, dz = _xz_unit(to_obs)
+        features[4] = dx
+        features[5] = dz
+        features[6] = min(dist_obs / max_dist, 1.0)
+
+    # ── Propriocepção + bordas ─────────────────────────────────────────────
+    features[7] = max(-1.0, min(1.0, dir_x))
+    features[8] = max(-1.0, min(1.0, dir_z))
+    px = worm.head.position.x
+    pz = worm.head.position.z
+    features[9] = max(0.0, min(1.0, (limit - abs(px)) / limit))
+    features[10] = max(0.0, min(1.0, (limit - abs(pz)) / limit))
+
+    return features
+
+
+def calculate_food_reward(worm, env, state) -> float:
+    """Recompensa unimodal do alimento (E1), por passo, clip [-1,1].
+
+    r = progresso + smell + eventos comer/permanecer (+ obstáculos) × (1+fome).
+    Atualiza APENAS prev_dist_food/prev_dist_obs/prev_position (legado separado).
+    """
+    radius = CONFIG.get('food_radius', CONFIG.get('arrival_radius', 7.0))
+    reward = 0.0
+
+    _, dist_food = _nearest(worm, _food_sources(env))
+    _, dist_obs = _nearest(worm, getattr(env, 'obstacles', []))
+
+    # ── Olfato denso (sinal mesmo longe, sem progresso mensurável) ──────────
+    if dist_food is not None and dist_food > 0.05:
+        reward += CONFIG.get('smell_bonus', 0.3) / (1.0 + dist_food)
+
+    # ── Progresso (aproximar = bom; sem termo negativo de luz) ──────────────
+    prev_food = state.get('prev_dist_food', None)
+    if dist_food is not None and prev_food is not None:
+        reward += CONFIG.get('progress_scale', 3.0) * (prev_food - dist_food)
+
+    # ── Eventos comer / permanecer ──────────────────────────────────────────
+    if dist_food is not None:
+        if prev_food is not None and dist_food < radius <= prev_food:
+            reward += CONFIG.get('eat_bonus', 5.0)
+        if dist_food < radius:
+            reward += CONFIG.get('inside_food_reward', 0.5)
+
+    # ── Obstáculos (idêntico ao legado: colisão + proximidade + progresso) ──
+    obs_radius = CONFIG.get('obstacle_radius', 2.5)
+    if dist_obs is not None:
+        if dist_obs > 0.1:
+            reward -= CONFIG.get('obstacle_proximity_penalty', 0.2) / max(dist_obs, 0.5)
+        prev_obs = state.get('prev_dist_obs', None)
+        if prev_obs is not None and dist_obs < obs_radius <= prev_obs:
+            reward -= CONFIG.get('obstacle_penalty', 3.0)
+        if dist_obs < obs_radius:
+            reward -= CONFIG.get('obstacle_penalty', 3.0) * 0.3
+        if prev_obs is not None:
+            reward += CONFIG.get('obstacle_avoid_reward', 0.18) * (dist_obs - prev_obs)
+
+    # ── Fome E4: multiplica (lê; não incrementa aqui) ────────────────────────
+    hunger = float(state.get('hunger', 0.0) or 0.0)
+    reward *= (1.0 + CONFIG.get('hunger_gain', 0.5) * max(0.0, min(1.0, hunger)))
+
+    # ── Anti-farniente (respeita idle_cost legado, hoje 0) ──────────────────
+    if CONFIG.get('idle_cost', 0) > 0 and state.get('prev_position') is not None:
+        movement = (worm.head.position - state['prev_position']).length()
+        if movement < CONFIG.get('idle_threshold', 0.05):
+            reward -= CONFIG['idle_cost']
+
+    state['prev_dist_food'] = dist_food
+    state['prev_dist_obs'] = dist_obs
+    state['prev_position'] = Vec3(worm.head.position)
+
+    return max(-1.0, min(1.0, reward))
