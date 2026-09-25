@@ -75,7 +75,7 @@ CONFIG = {
     'auto_difficulty'      : False, # Se True, sobe de nível a cada 80 episódios
 
     # ── Cérebro ──────────────────────────────────────────────────────────────
-    'n_inputs'         : 17,    # Fase 12: 11 (luz/chuva+obs) + 6 (vel 2 + borda 2 + angulos 2)
+    'n_inputs'         : 15,    # Fase 12 enxuta: 11 (luz/chuva+obs) + 4 (vel 2 + borda 2); angulos removidos (overfit)
     'n_hidden'         : 32,    # Fase 11: primeira camada oculta (era 16)
     'n_hidden2'        : 16,    # Fase 11: segunda camada oculta — arquitetura 11→32→16→5
     'n_outputs'        : 3,     # Saídas contínuas (usado pela Rede_Neural legada)
@@ -127,6 +127,7 @@ CONFIG = {
     # ── Métricas, memória e visualização (Fase 5) ────────────────────────────
     'seed'             : 42,    # Semente global de aleatoriedade (reproduzível)
     'weights_file'     : 'pesos.json',  # Salvar/carregar o cérebro (teclas S/L)
+    'checkpoint_interval': 50,  # Fase 10: salva pesos a cada N eps (anti-perda em run longo)
     'grid_cells'       : 9,     # Grade de visualização da política (N × N setas)
     'rolling_window'   : 10,    # Janela da recompensa média exibida no HUD
 

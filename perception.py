@@ -27,12 +27,15 @@ def _xz_unit(to_vec):
     return 0.0, 0.0
 
 
-# ─── ESTADO (SENSORES 17-DIM, Fase 12) ──────────────────────────────────────────
+# ─── ESTADO (SENSORES 15-DIM, Fase 12 enxuta) ───────────────────────────────────
 #
 # O verme "vê" geometria + obstáculos + propriocepção. Isso dá à rede a
 # informação de EM QUE DIREÇÃO ir, O QUE desviar e PARA ONDE ESTÁ INDO —
 # sem isso, navegar com barreiras é impossível (o verme não sabia "para onde
 # estava indo", só "para onde está a chuva").
+#
+# Revisão anti-overfit (unificado 1+2): ângulos 15-16 removidos — redundantes
+# com dir+vel, mascarar no_ang deu 43.3% vs 26.7% full17. Mantidos vel+borda.
 #
 #   índice | feature       | significado
 #   -------+---------------+--------------------------------------------
@@ -51,8 +54,6 @@ def _xz_unit(to_vec):
 #  12      | vel_z         | direção atual Z (propriocepção, [-1,1])
 #  13      | borda_x       | distância à borda X normalizada [0,1] (1=centro, 0=borda)
 #  14      | borda_z       | distância à borda Z normalizada [0,1] (1=centro, 0=borda)
-#  15      | angulo_luz    | ângulo relativo direção->luz / pi, em [-1,1] (0=alinhado)
-#  16      | angulo_chuva  | ângulo relativo direção->chuva / pi, em [-1,1] (0=alinhado)
 
 def _wrap_pi(a):
     """Normaliza um ângulo para [-pi, pi]."""
@@ -65,13 +66,12 @@ def _wrap_pi(a):
 
 
 def get_sensor_inputs(worm, env, state) -> list:
-    """Devolve o estado com geometria: 17 features (direções em [-1,1], resto em [0,1])."""
-    import math
+    """Devolve o estado com geometria: 15 features (direções em [-1,1], resto em [0,1])."""
     max_dist = CONFIG['sensor_max_dist']
     radius   = CONFIG['arrival_radius']
     limit    = CONFIG.get('map_limit', 32)
 
-    features = [0.0] * 17
+    features = [0.0] * 15
 
     # ── Direção atual (propriocepção — fallback para vermes falsos de teste) ──
     direction = getattr(worm, 'direction', None)
@@ -123,15 +123,6 @@ def get_sensor_inputs(worm, env, state) -> list:
     pz = worm.head.position.z
     features[13] = max(0.0, min(1.0, (limit - abs(px)) / limit))
     features[14] = max(0.0, min(1.0, (limit - abs(pz)) / limit))
-
-    # ── Fase 12: ângulos relativos (quanto precisa virar; 0=alinhado) ─────────
-    cur = math.atan2(dir_z, dir_x)
-    if to_light is not None and (abs(to_light.x) > 0.01 or abs(to_light.z) > 0.01):
-        tgt = math.atan2(to_light.z, to_light.x)
-        features[15] = _wrap_pi(tgt - cur) / math.pi
-    if to_rain is not None and (abs(to_rain.x) > 0.01 or abs(to_rain.z) > 0.01):
-        tgt = math.atan2(to_rain.z, to_rain.x)
-        features[16] = _wrap_pi(tgt - cur) / math.pi
 
     return features
 

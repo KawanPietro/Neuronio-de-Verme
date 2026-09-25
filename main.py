@@ -57,7 +57,7 @@ random.seed(CONFIG['seed'])  # execução reproduzível
 FOOD_MODE = MAZE_NAME is not None
 N_INPUTS_ACTIVE = CONFIG.get('n_inputs_food', 11) if FOOD_MODE else CONFIG['n_inputs']
 if FOOD_MODE:
-    print(f"  MODO ALIMENTO 11-dim (labirinto {MAZE_NAME}); pesos 17-dim incompatíveis serão ignorados")
+    print(f"  MODO ALIMENTO 11-dim (labirinto {MAZE_NAME}); pesos 15-dim incompatíveis serão ignorados")
 
 # ─── ILUMINAÇÃO ───────────────────────────────────────────────────────────────
 DirectionalLight(y=2, z=-1)
@@ -128,8 +128,8 @@ camera.parent = cam_pivot
 camera.position = (0, 40, -85)
 camera.rotation = (24, 0, 0)
 
-# ─── CÉREBRO: política estocástica (17 → 32 → 16 → 5 ações, Fase 12) ───────
-# Lean: dimensão ativa (17 legado / 11 alimento); load_brain já descarta incompatível
+# ─── CÉREBRO: política estocástica (15 → 32 → 16 → 5 ações, Fase 12 enxuta) ───────
+# Lean: dimensão ativa (15 legado / 11 alimento); load_brain já descarta incompatível
 brain = PolicyNetwork(
     N_INPUTS_ACTIVE,
     CONFIG['n_hidden'],
@@ -138,7 +138,7 @@ brain = PolicyNetwork(
     n_hidden2=CONFIG.get('n_hidden2'),
 )
 
-# ─── CRÍTICO (Fase 8 — A2C): V(s) 17 → 32 → 16 → 1 (Fase 12) ──────────────
+# ─── CRÍTICO (Fase 8 — A2C): V(s) 15 → 32 → 16 → 1 (Fase 12 enxuta) ──────────────
 critic = CriticNetwork(
     N_INPUTS_ACTIVE,
     CONFIG['n_hidden'],
@@ -340,7 +340,7 @@ def get_food_target_direction():
 
 
 def get_sensors():
-    """Lean dispatch: 11-dim alimento em FOOD_MODE, 17-dim legado senão."""
+    """Lean dispatch: 11-dim alimento em FOOD_MODE, 15-dim legado senão."""
     if FOOD_MODE:
         return get_food_sensor_inputs(worm, env, state)
     return get_sensor_inputs(worm, env, state)
@@ -723,6 +723,17 @@ def finish_episode():
         print(f"\n-- Concluido ({EVAL_EPISODES} episodios): pesos salvos em {CONFIG['weights_file']}")
         quit()
 
+    # Fase 10: checkpoint periódico anti-perda (exp #14 perdeu 419eps sem save).
+    # Salva no mesmo weights_file para --eval retomar de onde parou.
+    if not EVAL_MODE and not VISUAL_MODE:
+        _ckpt = CONFIG.get('checkpoint_interval', 50)
+        if _ckpt and state['episode_count'] % _ckpt == 0:
+            try:
+                save_brain(CONFIG['weights_file'], brain, critic)
+                print(f"  [checkpoint ep{state['episode_count']}] pesos salvos em {CONFIG['weights_file']}")
+            except Exception as e:
+                print(f"  [checkpoint ep{state['episode_count']}] FALHA ao salvar: {e}")
+
     if FOOD_MODE:
         # Lean: NUNCA randomize_sources/obstacles aqui (destruiria o labirinto).
         # T8: alimento a até schedule(ep) do spawn (perto→longe); desligado=legado.
@@ -785,7 +796,7 @@ def update():
     if not FOOD_MODE:
         env.update_rain_particles()
 
-    # ── Estado (11-dim alimento / 17-dim legado) e amostragem ──────────────────
+    # ── Estado (11-dim alimento / 15-dim legado) e amostragem ──────────────────
     sensors = get_sensors()
     action = brain.sample_action(sensors)
 

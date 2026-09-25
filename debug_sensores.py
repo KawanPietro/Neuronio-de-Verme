@@ -1,7 +1,7 @@
 """
-Debug do contrato de comportamento (Fase 1 + Fase 12: estado 17-dim).
+Debug do contrato de comportamento (Fase 1 + Fase 12 enxuta: estado 15-dim).
 
-Imprime o estado 17-dim e a recompensa por progresso a cada passo, mostrando que
+Imprime o estado 15-dim e a recompensa por progresso a cada passo, mostrando que
 `r` é MAIOR quando o verme se aproxima da chuva (e menor quando se afasta).
 
 Headless: usa entidades falsas em vez de abrir a janela do Ursina.
@@ -96,13 +96,13 @@ def test_casos_limite():
     state = new_state()
     sensors = get_sensor_inputs(worm, env, state)
     r = calculate_reward(worm, env, state)
-    c1 = (len(sensors) == 17
+    c1 = (len(sensors) == 15
           and all(abs(s) < 1e-9 for s in sensors[0:11])
           and abs(sensors[11] - 0.0) < 1e-9 and abs(sensors[12] - 1.0) < 1e-9
           and 0.0 <= sensors[13] <= 1.0 and 0.0 <= sensors[14] <= 1.0
           and abs(r) < 1e-9)
     all_ok &= c1
-    print(f"[{'OK' if c1 else 'FALHOU'}] sem fontes: sensores fonte zerados (17-dim), r neutro={r:+.3f}")
+    print(f"[{'OK' if c1 else 'FALHOU'}] sem fontes: sensores fonte zerados (15-dim), r neutro={r:+.3f}")
 
     # C2 — Fonte além do alcance dos sensores: features saturam em [0,1], sem crash.
     rain  = FakeEntity(x=100, y=1, z=0)
@@ -128,19 +128,18 @@ def test_casos_limite():
     all_ok &= c3
     print(f"[{'OK' if c3 else 'FALHOU'}] idle: worm parado sem penalidade, r={r:+.3f}")
 
-    # C4 — Fase 12: 17-dim em faixa (vel [-1,1], borda [0,1], angulos [-1,1])
+    # C4 — Fase 12 enxuta: 15-dim em faixa (vel [-1,1], borda [0,1])
     rain = FakeEntity(x=-10, y=1, z=0)
     light = FakeEntity(x=+10, y=1, z=0)
     env = FakeEnv(rain=[rain], light=[light])
     worm = FakeWorm(x=0, y=1.25, z=0)
     state = new_state()
     sensors = get_sensor_inputs(worm, env, state)
-    c4 = (len(sensors) == 17
+    c4 = (len(sensors) == 15
           and -1.0 <= sensors[11] <= 1.0 and -1.0 <= sensors[12] <= 1.0
-          and 0.0 <= sensors[13] <= 1.0 and 0.0 <= sensors[14] <= 1.0
-          and -1.0 <= sensors[15] <= 1.0 and -1.0 <= sensors[16] <= 1.0)
+          and 0.0 <= sensors[13] <= 1.0 and 0.0 <= sensors[14] <= 1.0)
     all_ok &= c4
-    print(f"[{'OK' if c4 else 'FALHOU'}] fase12: 17-dim em faixa vel/borda/angulo={sensors[11:17]}")
+    print(f"[{'OK' if c4 else 'FALHOU'}] fase12: 15-dim em faixa vel/borda={sensors[11:15]}")
 
     return all_ok
 
