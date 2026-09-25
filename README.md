@@ -78,8 +78,11 @@ Neuronio-de-Verme/
 ├── pesos.json           # Cérebro salvo (teclas S/L, ou fim de --eval)
 ├── pesos_food_A100.json # Cérebro 11-dim da Fase 14 alimento (treino headless 100eps maze A)
 ├── labirintos.json      # Labirinto A_treino ≠ B_teste (métrica de generalização)
-├── EXPERIMENTOS.md      # Tabela de ciência: o que mudou, o que aconteceu, conclusão
 ├── requirements.txt     # Dependência: ursina
+├── docs/                # Documentação consolidada: EXPERIMENTOS + planos
+│   ├── EXPERIMENTOS.md
+│   ├── PLANO_DE_MELHORIAS.md
+│   └── PLANO_LABIRINTO_COMIDA.md
 └── README.md            # Este documento
 ```
 
@@ -361,7 +364,7 @@ O CSV (`episodios.csv`) registra por episódio: `estagio, recompensa_*, retorno,
   ```bash
   python main.py --eval --episodes=50 --set=learning_rate=0.005 --set=gamma=0.95
   ```
-  Registre os resultados em `EXPERIMENTOS.md`.
+  Registre os resultados em `docs/EXPERIMENTOS.md`.
 
 ---
 
@@ -401,7 +404,7 @@ afasta `+0.15`/ep).
 avalia sempre em B (`python main.py --eval --maze=B --episodes=100`, ou rápido
 sem GUI via `train_food_headless.py --eval --weights=...`).
 
-**Resultado (congelado, `EXPERIMENTOS.md #15–16`):** treino 100eps em A →
+**Resultado (congelado, `docs/EXPERIMENTOS.md #15–16`):** treino 100eps em A →
 eval A **17%** (teto do professor 66%), eval B **17%** (teto 80%). DoD relativo
 (≥80% do professor): A 26% / B 21% — **não atingido**; o oráculo oscila
 (B 60–80%), então DoD absoluto em B é loteria.
@@ -449,21 +452,21 @@ Analisando o código, alguns pontos merecem atenção para quem for continuar o 
 | 0–4 | Base, sensores, MLP, REINFORCE, currículo A/B/C | ✅ | `main.py: current_stage/lambda_imitation`, `perception.py` |
 | 5–7 | HUD/grade/persistência, robustez, reward shaping | ✅ | `main.py: HUD/grid`, `test_mlp.py`, `debug_sensores.py` |
 | 8–9 | A2C (critic+GAE) e PPO (clipping) — 40% eval | ✅ | `mlp.py: CriticNetwork/compute_gae/ppo_grad` |
-| 10–11 | Treino longo + rede profunda `→32→16→` | ⚠️ parcial | `config.py: lr_decay/temp`, `EXPERIMENTOS.md: #8–10` |
+| 10–11 | Treino longo + rede profunda `→32→16→` | ⚠️ parcial | `config.py: lr_decay/temp`, `docs/EXPERIMENTOS.md: #8–10` |
 | 12 | Estado 17-dim (vel/borda/ângulos) | ✅ código | `perception.py: get_sensor_inputs`, `config.py: n_inputs=17` |
 | 13 | Replay Buffer off-policy | ✅ código | `mlp.py: ReplayBuffer/ppo_update_from_buffer` |
 | 15 | Obstáculos/muros + 4 níveis + colisão | ✅ | `environment.py: randomize_obstacles`, tecla `O` |
-| 14 | Avaliação DoD ≥80% | ❄️ congelada (legado 10%; alimento 21–26% do prof) | `EXPERIMENTOS.md #13/#15–16`; teto do oráculo A66/B80 |
+| 14 | Avaliação DoD ≥80% | ❄️ congelada (legado 10%; alimento 21–26% do prof) | `docs/EXPERIMENTOS.md #13/#15–16`; teto do oráculo A66/B80 |
 | F8 | Reformulação alimento + labirintos + currículo | ✅ | Ver seção F8 acima; `train_food_headless.py`, `debug_maze.py`, `debug_food.py` |
 
 **Roteiro de estudo (30 min para apresentar):**
 1. `python test_mlp.py` — prova que o backprop está certo (5 min).
 2. `python debug_sensores.py` — prova que a recompensa ensina "ir para chuva" + testes C1–C4 da Fase 12 (5 min).
 3. `python main.py` — mostre HUD, tecla `P` (grade), tecla `A` (professor on/off), tecla `O` (níveis) (10 min).
-4. `EXPERIMENTOS.md` + `episodios.csv` — conte a história 20%→40% e por que colapsa sem Fase 10/11/12 (10 min).
-5. Detalhe de referência: `PLANO_DE_MELHORIAS.md` tem o diagnóstico completo (treino curto, dados descartados, rede pequena).
+4. `docs/EXPERIMENTOS.md` + `episodios.csv` — conte a história 20%→40% e por que colapsa sem Fase 10/11/12 (10 min).
+5. Detalhe de referência: `docs/PLANO_DE_MELHORIAS.md` tem o diagnóstico completo (treino curto, dados descartados, rede pequena).
 
-**Como registrar a próxima mudança (padrão do grupo):** edite `config.py` ou código → rode `test_mlp.py` + `debug_sensores.py` → treino curto `--episodes=35` → eval `--eval --episodes=50` → adicione 1 linha em `EXPERIMENTOS.md` → atualize esta seção + `PLANO_DE_MELHORIAS.md`.
+**Como registrar a próxima mudança (padrão do grupo):** edite `config.py` ou código → rode `test_mlp.py` + `debug_sensores.py` → treino curto `--episodes=35` → eval `--eval --episodes=50` → adicione 1 linha em `docs/EXPERIMENTOS.md` → atualize esta seção + `docs/PLANO_DE_MELHORIAS.md`.
 
 ## 💡 Ideias para melhorias futuras
 
@@ -487,7 +490,7 @@ Analisando o código, alguns pontos merecem atenção para quem for continuar o 
 - [ ] Adicionar múltiplos vermes competindo/cooperando.
 
 **Experimentação**
-- [x] Multi-seed reproduzível + `episodios.csv` + tabela em `EXPERIMENTOS.md`.
+- [x] Multi-seed reproduzível + `episodios.csv` + tabela em `docs/EXPERIMENTOS.md`.
 - [ ] Fase 14: validar DoD ≥80% em 100+ eps (ou documentar limite do RL puro sem frameworks).
 
 ---

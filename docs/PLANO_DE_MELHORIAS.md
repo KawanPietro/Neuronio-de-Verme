@@ -14,7 +14,7 @@
 > - **Autonomia final**: rede neural decide 100% das ações; o professor só existe nas fases de treino.
 > - **Comportamentos**: trilha legada com chuva (alvo) e luz (perigo);
 >   trilha atual com **alimento** (objetivo único) atrás de `--maze=A/B`
->   (ver seção F8 do `README.md`).
+>   (ver seção F8 do `../README.md`).
 > - **Entregável**: este documento de rota por etapas.
 
 ---
@@ -157,7 +157,7 @@ O reward é por passo (200 passos/episódio), mas o agente precisa lembrar: "há
   `--weights/--save`, `--set`, `--epsilon`)
 - `labirintos.json` — A_treino ≠ B_teste (métrica de generalização)
 - `VIABILIDADE/PLANO_MUDANCAS` — reformulação alimento: incorporados à seção
-  F8 do `README.md` (documentos avulsos removidos na unificação 5→3).
+  F8 do `../README.md` (documentos avulsos removidos na unificação 5→3).
 - `EXPERIMENTOS.md` — tabela de ciência (16 experimentos; #15–16 = Fase 14 alimento)
 - `PLANO_DE_MELHORIAS.md` — este arquivo
 - `episodios.csv` — métricas por episódio (gerado pelo jogo)
