@@ -9,47 +9,40 @@ CONFIG = {
     'segment_size'     : 2.5,  # Tamanho de cada segmento (e da cabeça)
     'segment_gap'      : 2.5,  # Espaçamento entre segmentos
     'speed'            : 6.0,  # Velocidade de movimento
-    'map_limit'        : 32,   # Limite do mapa em X e Z — laboratório espaçoso
+    # L17-mapa: dobrado 16→32 (mesma densidade temporal: passos e fome
+    # reescalados abaixo). wall_margin mantido = faixa relativamente estreita.
+    'map_limit'        : 32,   # Labirinto A/B ampliado (era 16)
     'ground_scale'     : 72,   # Tamanho visual do chão (deve ser >= 2*map_limit)
 
-    # ── Sensores / geometria ─────────────────────────────────────────────────
-    'sensor_max_dist'  : 55.0,  # Distância de referência para normalizar sensores (acompanha mapa maior)
-    'light_repel_dist' : 28.0,  # Alcance da repulsão pela luz (campo de potencial)
-    'arrival_radius'   : 7.0,   # Raio de "chegada" na chuva / "perigo" na luz
+    # ── Sensores / geometria (alimento em terreno limpo) ─────────────────────────
+    # L17-mapa: diagonal 32 ≈ 90; 60 mantém gradiente sem saturar tudo em 1.0.
+    'sensor_max_dist'  : 60.0,  # Referência p/ normalizar (era 30 no mapa 16)
+    'food_radius'       : 3.0,   # Raio de "comeu" (precisa chegar perto)
 
     # ── Recompensa por progresso (reward shaping, por passo) ─────────────────
-    # Fase 7: sinais mais fortes para que o RL aprenda a VIRAR (não só andar reto).
+    # Sinais fortes para que o RL aprenda a VIRAR (não só andar reto).
+    # Objetivo único: só atrair (alimento). Sem termo negativo de luz.
     'progress_scale'      : 3.0,   # Ganho aplicado ao Δ distância (unidades de movimento)
-    'arrival_bonus'       : 5.0,   # Bônus ao entrar no raio da chuva
-    'danger_penalty'      : 5.0,   # Penalidade ao entrar na zona de perigo da luz
-    'inside_rain_reward'  : 0.5,   # Recompensa por permanecer dentro da chuva
-    'inside_light_penalty': 0.5,   # Penalidade por permanecer perto da luz
+    'eat_bonus'         : 5.0,   # Bônus ao cruzar food_radius
+    'inside_food_reward': 0.5,   # Recompensa por permanecer sobre o alimento
+    'smell_bonus'       : 0.3,   # Olfato E3: smell=1/(1+dist), bônus contínuo
     'idle_cost'           : 0.0,   # Desativado — o verme não precisa de incentivo p/ andar
     'idle_threshold'      : 0.05,  # Deslocamento/frame abaixo disso conta como "parado"
 
-    # ── Recompensa de proximidade (Fase 7) ───────────────────────────────────
-    # Potencial que puxa o verme para perto da chuva e empurra da luz.
-    'proximity_rain_bonus'  : 0.3,  # Bônus proporcional a 1/dist para chuva
-    'proximity_light_penalty': 0.3, # Penalidade proporcional a 1/dist para luz
-
-    # ── Alimento (reformulação E1-E4, aditivo: legado luz/chuva intacto) ──────
-    # Objetivo único: encontrar alimento. Chaves novas; n_inputs legado (17)
-    # mantido até T4 migrar main.py. n_inputs_food é o alvo (11-dim).
-    'food_radius'       : 3.0,   # Raio de "comeu" (menor que arrival 7: precisa chegar perto)
-    'eat_bonus'         : 5.0,   # Bônus ao cruzar food_radius (equivale ao arrival_bonus)
-    'inside_food_reward': 0.5,   # Recompensa por permanecer sobre o alimento
-    'smell_bonus'       : 0.3,   # Olfato E3: smell=1/(1+dist), bônus contínuo
+    # ── Alimento + fome (E3/E4) ───────────────────────────────────────────────
     'hunger_gain'       : 0.5,   # E4: r *= (1 + hunger_gain*hunger); hunger 0→1
-    'hunger_rate'       : 0.002, # Incremento de fome por passo (200 passos ≈ 0.4)
-    'n_inputs_food'     : 11,    # 4 food + 3 obs + 4 propriocepção (alvo T4)
-    'maze_file'         : 'labirintos.json',  # E5: labirintos treino/teste
-    'maze_default'      : 'A',   # Treino padrão; avaliação oficial usa 'B'
-    'food_limit'        : 12,    # Limite de respawn do alimento (labirinto 16)
+    # L17-mapa: episódio dobrou (400 passos) → taxa cai à metade p/ mesma
+    # fome por episódio (~0.4). P/ iniciante: fome enche no mesmo ritmo real.
+    'hunger_rate'       : 0.001, # Incremento de fome por passo (400 passos ≈ 0.4)
+    'n_inputs'          : 8,     # Estado canônico 8-dim: 4 food + 4 propriocepção (sem obstáculos)
+    'n_inputs_food'     : 8,     # Alias de compat (train_headless/debug_food usam esta chave)
+    'food_limit'        : 24,    # L17-mapa: teto do respawn (era 12 no mapa 16)
     # ── Currículo de distância T8 (Lean: barato e decisivo) ─────────────────
     # Alimento nasce perto e afasta aos poucos: max_d(ep) = start + growth*ep.
     # 0/desligado = legado (uniforme em food_limit). Via --set sem editar código.
-    'food_start_dist'   : 5.0,   # distância máx inicial do spawn/worm
-    'food_growth'       : 0.15,  # + por episódio (≈12 em ~47eps com start 5)
+    # L17-mapa: start 5→10 e growth dobrado (teto ~24 em ~47eps, mesmo ritmo).
+    'food_start_dist'   : 10.0,  # distância máx inicial do spawn/worm
+    'food_growth'       : 0.3,   # + por episódio (≈24 em ~47eps com start 10)
     'food_curriculum'   : 0,     # 0=desligado (legado); 1=ligado
 
     # ── Penalidade por repetição de ação (Fase 7) ────────────────────────────
@@ -58,26 +51,22 @@ CONFIG = {
     'action_repeat_penalty' : 0.1,
     'action_repeat_window'  : 20,
 
-    # ── Obstáculos e níveis de dificuldade (Fase 15+) ──────────────────────
-    'difficulty'       : 1,     # 0=sem obstáculos, 1=fácil, 2=médio, 3=difícil
-    'difficulty_levels': {
-        0: {'n_obstacles': 0, 'n_walls': 0, 'obstacle_scale': 0.0, 'label': 'LIVRE'},
-        1: {'n_obstacles': 4, 'n_walls': 0, 'obstacle_scale': 1.8, 'label': 'FACIL'},
-        2: {'n_obstacles': 4, 'n_walls': 2, 'obstacle_scale': 2.2, 'label': 'MEDIO'},
-        3: {'n_obstacles': 5, 'n_walls': 3, 'obstacle_scale': 2.8, 'label': 'DIFICIL'},
-    },
-    'obstacle_radius'      : 2.5,   # Raio de colisão (distância que conta como batida)
-    'obstacle_penalty'     : 3.0,   # Penalidade ao colidir/entrar no raio do obstáculo
-    'obstacle_proximity_penalty': 0.2,  # Penalidade por estar perto (1/dist)
-    'obstacle_avoid_reward': 0.18,  # Recompensa por se afastar do obstáculo (Δdist) — um pouco maior
-    'wall_length'          : 9.0,   # Comprimento dos muros (níveis 2-3)
-    'wall_thickness'       : 1.4,   # Espessura dos muros
-    'auto_difficulty'      : False, # Se True, sobe de nível a cada 80 episódios
+    # ── Recompensa por novidade (L9) ─────────────────────────────────────────
+    # Incentiva o agente a visitar estados novos, forçando exploração.
+    # Estados novos dão bônus; estados já visitados dão menos bônus (decaimento).
+    # Revisão mapa 32: janela 100→200 (50% do episódio de 400 passos, como era
+    # 100/200 antes). Janela curta demais inflava o bônus no fim do episódio
+    # (estados antigos evaporavam e viravam "novos" de novo).
+    'novelty_bonus'        : 0.2,   # Bônus por visitar estado novo
+    'novelty_decay'        : 0.99,  # Decaimento do bônus com o tempo
+    'novelty_window'       : 200,   # Janela de estados visitados (tamanho do buffer)
+
+    # ── Terreno limpo (sem obstáculos) ─────────────────────────────────────────
+    # Labirinto gigante futuro usará labirintos.json; por enquanto só verme + alimento.
 
     # ── Cérebro ──────────────────────────────────────────────────────────────
-    'n_inputs'         : 15,    # Fase 12 enxuta: 11 (luz/chuva+obs) + 4 (vel 2 + borda 2); angulos removidos (overfit)
-    'n_hidden'         : 32,    # Fase 11: primeira camada oculta (era 16)
-    'n_hidden2'        : 16,    # Fase 11: segunda camada oculta — arquitetura 11→32→16→5
+    'n_hidden'         : 32,    # Primeira camada oculta
+    'n_hidden2'        : 16,    # Segunda camada oculta — arquitetura 8→32→16→5
     'n_outputs'        : 3,     # Saídas contínuas (usado pela Rede_Neural legada)
     'n_actions'        : 5,     # Ações discretas da política (Fase 2)
     'learning_rate'    : 0.05,  # Taxa de aprendizado (alpha) — Fase 7: 5x maior
@@ -92,7 +81,10 @@ CONFIG = {
 
     # ── REINFORCE episódico (Fase 3) ─────────────────────────────────────────
     'gamma'            : 0.99,  # Fator de desconto: ações perto da recompensa pesam mais
-    'episode_steps'    : 200,   # H passos por episódio antes de treinar a política
+    # L17-mapa: passos dobrados (200→400) p/ mesma cobertura por área
+    # (speed 6 → 0.1/passo; 400 passos ≈ 40 unidades ≈ diâmetro do mapa 32).
+    # Custo: 2x por episódio. Via --set=episode_steps=N sem editar código.
+    'episode_steps'    : 400,   # H passos por episódio antes de treinar a política
     'lr_decay'         : 0.998, # Fase 10: decay mais lento (lr estável por 500 eps)
     'reward_scale'     : 5.0,   # Escala da recompensa — Fase 7: 5x maior (sinal forte)
     'log_csv'          : 'episodios.csv',  # Curva de recompensa média por episódio
@@ -103,6 +95,11 @@ CONFIG = {
 
     # ── PPO (Fase 9): Proximal Policy Optimization ───────────────────────────
     'ppo_clip'         : 0.2,   # ε do clipping: limita razão π_new/π_old em [1−ε, 1+ε]
+
+    # ── DQN (L14b/L16): Q-Learning value-based ────────────────────────────────
+    # P/ iniciante: o Q aprende valores em escala crua [-1,1] (estável).
+    # O PPO usa reward_scale=5.0; herdar 5.0 explodia o target do Q.
+    'q_reward_scale'   : 1.0,   # escala da recompensa SÓ p/ td_update
 
     # ── Replay Buffer (Fase 13) ──────────────────────────────────────────────
     'buffer_max_episodes'  : 50,    # quantos episódios inteiros o buffer guarda
@@ -134,7 +131,25 @@ CONFIG = {
     # ── Robustez e calibração (Fase 6) ───────────────────────────────────────
     'temperature_decay': 0.998, # Fase 10: explora por mais tempo (500 eps)
     'min_temperature'  : 0.2,   # Fase 10: permite exploração residual (não congela)
-    'wall_margin'      : 4.0,   # Faixa perto da borda em que o professor foge da parede
+    'wall_margin'      : 4.0,   # BORDA (nao muro): faixa em que o professor foge da parede
+
+    # ── Labirinto gigante (opt-in; baseline limpo intacto) ──────────────────
+    # maze_enabled=0 -> terreno limpo (default, 8-dim, sem colisao).
+    # maze_enabled=1 -> carrega maze_key de maze_file, com colisao + spawn seguro.
+    'maze_enabled'      : 0,     # 0=limpo (baseline); 1=gigante
+    'maze_file'         : 'labirintos.json',
+    'maze_key'          : 'gigante',
+    'maze_seed'         : 42,    # seed do gerador DFS (reproduzivel)
+    'maze_clearance'    : 2.5,   # folga verme-parede p/ ser "livre"
+    'min_wall_dist'     : 2.5,   # distancia minima spawn/food das paredes
+    'min_food_spawn_dist': 8.0,  # anti-colado: comida longe do nascimento
+    'worm_radius'       : 1.5,   # raio de colisao da cabeca
+
+    # ── Movimento livre (fix "sempre sobe") ──────────────────────────────────
+    # Causa: heading fixo (0,0,1)=norte + giro ~1 grau/passo (180 passos p/
+    # meia-volta). Fix: heading aleatorio por episodio + turn_rate maior.
+    # turn_rate 1.05->2.4: 180 graus em ~75 passos (era ~180). Via --set.
+    'spawn_heading'     : 'random',  # 'random'=qualquer direcao; 'fixed'=norte (legado)
 
     # ── Log ──────────────────────────────────────────────────────────────────
     'log_interval'     : 1.0,    # Intervalo (s) entre linhas de log no jogo
@@ -145,6 +160,6 @@ CONFIG = {
         'pan_speed' : 20.0,
         'zoom_speed': 5.0,
         'min_zoom'  : 5.0,
-        'max_zoom'  : 80.0,
+        'max_zoom'  : 140.0,  # Revisão mapa 32: cobre a câmera inicial (-125)
     },
 }

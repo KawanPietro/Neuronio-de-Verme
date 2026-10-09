@@ -4,3 +4,5 @@ __pycache__/
 venv/
 episodios.csv
 pesos.json
+# Arquivo histórico arquivado (exceção à regra acima — não apagar)
+!docs/historico/pesos/pesos.json

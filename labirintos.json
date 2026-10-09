@@ -1,1 +1,193 @@
-{"b_teste":{"descricao":"Corredor em Z espelhado + muro extra. Nunca usado no treino; metrica oficial da pergunta-base.","food_zones":[[10,1,-8],[-6,1,10]],"map_limit":16,"muros":[{"angle":0,"length":14,"thickness":1.4,"x":-2,"z":-4},{"angle":90,"length":14,"thickness":1.4,"x":6,"z":4},{"angle":0,"length":8,"thickness":1.4,"x":-8,"z":6}],"nome":"B_teste","pedras":[],"spawn":[0,1.25,-12]},"a_treino":{"descricao":"Corredor em S com 2 muros. Ensina contornar sem decorar posicao do alimento.","food_zones":[[-10,1,8],[10,1,10]],"map_limit":16,"muros":[{"angle":0,"length":14,"thickness":1.4,"x":2,"z":2},{"angle":0,"length":14,"thickness":1.4,"x":-2,"z":-6}],"nome":"A_treino","pedras":[{"scale":1.8,"x":0,"z":0}],"spawn":[0,1.25,-12]}}
+{
+  "_nota": "v2: a_treino/b_teste limpos (baseline); gigante=DFS seed fixa, BFS valido.",
+  "a_treino": {
+    "descricao": "RESERVADO (vazio) \u00e2\u20ac\u201d terreno limpo at\u00c3\u00a9 o labirinto gigante",
+    "food_zones": [],
+    "map_limit": 32,
+    "muros": [],
+    "nome": "A_treino",
+    "pedras": [],
+    "spawn": [
+      0,
+      1.25,
+      -12
+    ]
+  },
+  "b_teste": {
+    "descricao": "RESERVADO (vazio) \u00e2\u20ac\u201d terreno limpo at\u00c3\u00a9 o labirinto gigante",
+    "food_zones": [],
+    "map_limit": 32,
+    "muros": [],
+    "nome": "B_teste",
+    "pedras": [],
+    "spawn": [
+      0,
+      1.25,
+      -12
+    ]
+  },
+  "gigante": {
+    "nome": "Gigante",
+    "descricao": "DFS 8x8 seed 42",
+    "map_limit": 32,
+    "spawn": [
+      -25.375,
+      1.25,
+      -25.375
+    ],
+    "food_zones": [
+      [
+        25.375,
+        1,
+        25.375
+      ],
+      [
+        25.375,
+        1,
+        -25.375
+      ]
+    ],
+    "muros": [
+      {
+        "x": -21.75,
+        "z": -3.625,
+        "sx": 1.2,
+        "sz": 7.25
+      },
+      {
+        "x": -14.5,
+        "z": -18.125,
+        "sx": 1.2,
+        "sz": 7.25
+      },
+      {
+        "x": -14.5,
+        "z": 18.125,
+        "sx": 1.2,
+        "sz": 7.25
+      },
+      {
+        "x": -7.25,
+        "z": -3.625,
+        "sx": 1.2,
+        "sz": 7.25
+      },
+      {
+        "x": -7.25,
+        "z": 25.375,
+        "sx": 1.2,
+        "sz": 7.25
+      },
+      {
+        "x": 0.0,
+        "z": -10.875,
+        "sx": 1.2,
+        "sz": 7.25
+      },
+      {
+        "x": 7.25,
+        "z": -3.625,
+        "sx": 1.2,
+        "sz": 7.25
+      },
+      {
+        "x": 14.5,
+        "z": -18.125,
+        "sx": 1.2,
+        "sz": 7.25
+      },
+      {
+        "x": 21.75,
+        "z": 18.125,
+        "sx": 1.2,
+        "sz": 7.25
+      },
+      {
+        "x": -21.75,
+        "z": -21.75,
+        "sx": 14.5,
+        "sz": 1.2
+      },
+      {
+        "x": 0.0,
+        "z": -21.75,
+        "sx": 14.5,
+        "sz": 1.2
+      },
+      {
+        "x": 0.0,
+        "z": -14.5,
+        "sx": 14.5,
+        "sz": 1.2
+      },
+      {
+        "x": 25.375,
+        "z": -14.5,
+        "sx": 7.25,
+        "sz": 1.2
+      },
+      {
+        "x": -18.125,
+        "z": -7.25,
+        "sx": 7.25,
+        "sz": 1.2
+      },
+      {
+        "x": -3.625,
+        "z": -7.25,
+        "sx": 7.25,
+        "sz": 1.2
+      },
+      {
+        "x": 18.125,
+        "z": -7.25,
+        "sx": 7.25,
+        "sz": 1.2
+      },
+      {
+        "x": 21.75,
+        "z": 0.0,
+        "sx": 14.5,
+        "sz": 1.2
+      },
+      {
+        "x": -14.5,
+        "z": 7.25,
+        "sx": 14.5,
+        "sz": 1.2
+      },
+      {
+        "x": 18.125,
+        "z": 7.25,
+        "sx": 21.75,
+        "sz": 1.2
+      },
+      {
+        "x": -10.875,
+        "z": 14.5,
+        "sx": 21.75,
+        "sz": 1.2
+      },
+      {
+        "x": 14.5,
+        "z": 14.5,
+        "sx": 14.5,
+        "sz": 1.2
+      },
+      {
+        "x": -25.375,
+        "z": 21.75,
+        "sx": 7.25,
+        "sz": 1.2
+      },
+      {
+        "x": 7.25,
+        "z": 21.75,
+        "sx": 14.5,
+        "sz": 1.2
+      }
+    ],
+    "pedras": [],
+    "seed": 42
+  }
+}

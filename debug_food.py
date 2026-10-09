@@ -1,12 +1,11 @@
 """
-Debug do modo alimento 11-dim (seção F8 do README.md).
+Debug do modo alimento 8-dim em terreno limpo.
 
 Verifica sem abrir a janela do Ursina:
 - contrato: r maior aproximando do alimento do que afastando
 - C1 sem alimento / C2 longe / C3 parado / C4 faixas / C5 fome / C6 evento comer
 
 Rode com: python debug_food.py
-Nao toca no legado 17-dim (debug_sensores.py continua válido).
 """
 from ursina import Vec3
 
@@ -30,18 +29,14 @@ class FakeWorm:
 
 
 class FakeEnv:
-    def __init__(self, foods, obstacles=None):
+    def __init__(self, foods):
         self.food_sources = foods
-        self.rain_sources = []  # legado vazio p/ provar que food é independente
-        self.light_sources = []
-        self.obstacles = obstacles if obstacles is not None else []
 
 
 def new_state(hunger=0.0):
     return {
         'hunger': hunger,
         'prev_dist_food': None,
-        'prev_dist_obs': None,
         'prev_position': None,
     }
 
@@ -55,7 +50,7 @@ def run_phase(worm, env, state, steps, dir_x, label):
         sensors = get_food_sensor_inputs(worm, env, state)
         r = calculate_food_reward(worm, env, state)
         rewards.append(r)
-        assert len(sensors) == FOOD_DIM == 11, f"dim errada: {len(sensors)}"
+        assert len(sensors) == FOOD_DIM == 8, f"dim errada: {len(sensors)}"
         if step % 30 == 0:
             sens = ", ".join(f"{s:+.2f}" for s in sensors)
             print(f"passo {step:3d} | sensores=[{sens}] | r={r:+.3f} hunger={state['hunger']:.2f}")
@@ -82,12 +77,21 @@ def main():
     ok_cases = True
 
     # C1 — sem alimento: sensores food zerados, r neutro, sem crash
+    # L16-refaz: r inclui bônus de novidade (L9, por-estado, independe de
+    # comida). P/ iniciante: explorar lugar novo rende +novelty_bonus mesmo sem
+    # comida — é o "espírito curioso". Teste desliga a novidade p/ provar o
+    # neutro base; C2–C6 seguem com novidade ligada (comportamento real).
     env0 = FakeEnv(foods=[])
     worm0 = FakeWorm(x=5, y=1.25, z=5)
     s0 = new_state()
     sens = get_food_sensor_inputs(worm0, env0, s0)
-    r = calculate_food_reward(worm0, env0, s0)
-    c1 = (len(sens) == 11 and sens[0] == 0.0 and sens[1] == 0.0
+    _nb = CONFIG.get('novelty_bonus', 0.0)
+    CONFIG['novelty_bonus'] = 0.0
+    try:
+        r = calculate_food_reward(worm0, env0, s0)
+    finally:
+        CONFIG['novelty_bonus'] = _nb
+    c1 = (len(sens) == 8 and sens[0] == 0.0 and sens[1] == 0.0
           and sens[2] == 0.0 and sens[3] == 0.0 and abs(r) < 1e-9)
     print(f"[{'OK' if c1 else 'FALHOU'}] C1 sem alimento: food zerado, r={r:+.3f}")
     ok_cases &= c1
@@ -113,12 +117,12 @@ def main():
     print(f"[{'OK' if c3 else 'FALHOU'}] C3 parado: r={r3:+.3f} (sem punicao)")
     ok_cases &= c3
 
-    # C4 — faixas 11-dim
+    # C4 — faixas 8-dim
     sens4 = get_food_sensor_inputs(FakeWorm(), FakeEnv([FakeEntity(x=-10, y=1, z=0)]), new_state())
-    c4 = (len(sens4) == 11 and -1.0 <= sens4[7] <= 1.0 and -1.0 <= sens4[8] <= 1.0
-          and 0.0 <= sens4[9] <= 1.0 and 0.0 <= sens4[10] <= 1.0
+    c4 = (len(sens4) == 8 and -1.0 <= sens4[4] <= 1.0 and -1.0 <= sens4[5] <= 1.0
+          and 0.0 <= sens4[6] <= 1.0 and 0.0 <= sens4[7] <= 1.0
           and 0.0 <= sens4[2] <= 1.0 and 0.0 <= sens4[3] <= 1.0)
-    print(f"[{'OK' if c4 else 'FALHOU'}] C4 faixas 11-dim OK")
+    print(f"[{'OK' if c4 else 'FALHOU'}] C4 faixas 8-dim OK")
     ok_cases &= c4
 
     # C5 — fome multiplica (mesmo passo, hunger 1 > hunger 0 quando r>0)

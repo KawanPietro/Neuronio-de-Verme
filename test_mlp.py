@@ -9,7 +9,7 @@ Rode com: python test_mlp.py
 import math
 import random
 
-from mlp import (MLP, PolicyNetwork, CriticNetwork, compute_returns,
+from mlp import (MLP, PolicyNetwork, CriticNetwork, QNetwork, compute_returns,
                   compute_gae, save_brain, load_brain, ReplayBuffer)
 
 
@@ -238,6 +238,9 @@ def main():
     # 12 — PPO from buffer: actor + critic atualizam (Fase 13)
     results.append(test_ppo_from_buffer())
 
+    # 13 — L14 QNetwork TD: Q(s,a) aproxima target (DQN)
+    results.append(test_qnetwork_td())
+
     print()
     if all(results):
         print("Todos os testes conferem.")
@@ -460,6 +463,42 @@ def test_ppo_from_buffer():
     assert stats['buffer_size'] == 150, f"Buffer size errado: {stats['buffer_size']}"
     assert stats['buffer_episodes'] == 5, f"Buffer eps errado: {stats['buffer_episodes']}"
     print("[OK] PPO from buffer -- actor + critic atualizam com mini-batches")
+    return True
+
+
+def test_qnetwork_td():
+    """L14 DQN: td_update reduz |Q(s,a) - target| e act() e-greedy funciona."""
+    random.seed(42)
+    q = QNetwork(8, 16, 5)
+    tgt = QNetwork(8, 16, 5)
+    tgt.sync_from(q)
+    s = [random.uniform(-1, 1) for _ in range(8)]
+    s2 = [random.uniform(-1, 1) for _ in range(8)]
+    # done=True → target = r exato (sem bootstrap), teste limpo
+    batch = [(s, 2, 1.0, s2, True) for _ in range(2)]
+    before = abs(q.q_values(s)[2] - 1.0)
+    stats = q.td_update(batch, target_net=tgt, gamma=0.99,
+                        learning_rate=0.01, regularization=0.0,
+                        reward_scale=1.0)
+    after = abs(q.q_values(s)[2] - 1.0)
+    assert after < before, f"TD nao aproximou: {before:.4f} -> {after:.4f}"
+    assert 'q_loss' in stats and stats['q_loss'] >= 0
+    acts = {q.act(s, epsilon=0.0) for _ in range(5)}
+    assert len(acts) == 1, "eps=0 deveria ser deterministico (argmax)"
+    # L16: bootstrap (done=False) — target = r + gamma*maxQ_tgt, não r puro.
+    # P/ iniciante: sem done, o Q aprende olhando a próxima cena (rede-alvo).
+    q2 = QNetwork(8, 16, 5)
+    t2 = QNetwork(8, 16, 5)
+    t2.sync_from(q2)
+    s3 = [random.uniform(-1, 1) for _ in range(8)]
+    s4 = [random.uniform(-1, 1) for _ in range(8)]
+    tgt_val = 0.5 + 0.99 * max(t2.q_values(s4))
+    b_before = abs(q2.q_values(s3)[1] - tgt_val)
+    q2.td_update([(s3, 1, 0.5, s4, False)], target_net=t2, gamma=0.99,
+                 learning_rate=0.01, regularization=0.0, reward_scale=1.0)
+    b_after = abs(q2.q_values(s3)[1] - tgt_val)
+    assert b_after < b_before, f"bootstrap nao aproximou: {b_before:.4f} -> {b_after:.4f}"
+    print("[OK] QNetwork TD -- DQN aproxima target, e-greedy OK")
     return True
 
 

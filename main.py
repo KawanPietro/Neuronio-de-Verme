@@ -10,38 +10,31 @@ from config import CONFIG
 from environment import Environment
 from mlp import (ACTIONS, PolicyNetwork, CriticNetwork, entropy, save_brain,
                   load_brain, ReplayBuffer, compute_gae)
-from perception import calculate_reward, get_sensor_inputs
-from perception import calculate_food_reward, get_food_sensor_inputs
+from perception import get_sensor_inputs, calculate_reward
 from worm import Worm
 
 app = Ursina()
 
-# ─── MODO DE EXECUÇÃO (Fase 5 + hub Verme.py) ─────────────────────────────────
-# python main.py [--eval] [--visual] [--episodes=N] [--difficulty=N] [--set k=v ...]
-#   --eval          → avaliação: professor desligado, sem treino, carrega pesos.json
-#   --visual        → visualização pura: sem treino, sem professor, sem CSV, só passeio
+# ─── MODO DE EXECUÇÃO ─────────────────────────────────────────────────────────
+# python main.py [--eval] [--visual] [--present] [--episodes=N] [--set k=v ...]
+#   --eval          → avaliação: professor desligado, sem treino, carrega pesos
+#   --visual        → passeio livre: sem treino, sem professor, sem CSV
+#   --present       → apresentação: como o visual, mas HUD só didático
+#                     (--apresentacao e --presentation são apelidos)
 #   --episodes=N    → roda N episódios e fecha (treino ou eval)
-#   --difficulty=N  → 0 LIVRE / 1 FACIL / 2 MEDIO / 3 DIFICIL  (alias para --set=difficulty)
-#   --set k=v       → sobrescreve CONFIG (tabela de experimentos)
-#   --maze=A/B       → modo alimento + labirinto (A treino, B teste oficial)
-#                     Lean: feature flag — legado luz/chuva intacto por padrão,
-#                     decide a remoção total o mais tarde possível (só após DoD).
+#   --set k=v       → sobrescreve CONFIG (ex: --set=food_curriculum=1)
 EVAL_MODE = '--eval' in sys.argv
 VISUAL_MODE = '--visual' in sys.argv
-EVAL_EPISODES = None
-MAZE_NAME = None  # Lean MVP: None = legado; 'A'/'B' = alimento + labirinto
-NUM_SEEDS = 1
+PRESENT_MODE = ('--present' in sys.argv or '--apresentacao' in sys.argv
+                or '--presentation' in sys.argv)
+# Apresentação tem prioridade: nunca treina nem avalia, mesmo com --eval junto.
+if PRESENT_MODE:
+    EVAL_MODE = False
+    VISUAL_MODE = False
+EPISODE_LIMIT = None
 for _arg in sys.argv:
     if _arg.startswith('--episodes='):
-        EVAL_EPISODES = int(_arg.split('=')[1])
-    elif _arg.startswith('--maze='):
-        MAZE_NAME = _arg.split('=', 1)[1]
-        print(f"  MAZE = {MAZE_NAME} (modo alimento)")
-    elif _arg.startswith('--seeds='):
-        NUM_SEEDS = int(_arg.split('=')[1])
-    elif _arg.startswith('--difficulty='):
-        CONFIG['difficulty'] = int(_arg.split('=')[1])
-        print(f"  CONFIG['difficulty'] = {CONFIG['difficulty']}")
+        EPISODE_LIMIT = int(_arg.split('=')[1])
     elif _arg.startswith('--set='):
         key, value = _arg[len('--set='):].split('=', 1)
         try:
@@ -50,34 +43,31 @@ for _arg in sys.argv:
             pass
         CONFIG[key] = value
         print(f"  CONFIG['{key}'] = {CONFIG[key]}")
+print(f"  Terreno limpo 8-dim (map_limit={CONFIG.get('map_limit', 32)})")
 
-random.seed(CONFIG['seed'])  # execução reproduzível
+random.seed(CONFIG['seed'])
 
-# Lean: decidir tarde — FOOD_MODE só quando --maze presente (evita migração big-bang)
-FOOD_MODE = MAZE_NAME is not None
-N_INPUTS_ACTIVE = CONFIG.get('n_inputs_food', 11) if FOOD_MODE else CONFIG['n_inputs']
-if FOOD_MODE:
-    print(f"  MODO ALIMENTO 11-dim (labirinto {MAZE_NAME}); pesos 15-dim incompatíveis serão ignorados")
+N_INPUTS_ACTIVE = CONFIG['n_inputs']  # 8 canonico (terreno limpo)
 
 # ─── ILUMINAÇÃO ───────────────────────────────────────────────────────────────
 DirectionalLight(y=2, z=-1)
-AmbientLight(color=Color(0.6, 0.6, 0.6, 1))  # Iluminação mais clara e vibrante
+AmbientLight(color=Color(0.6, 0.6, 0.6, 1))
 
 # ─── CHÃO E CÉU ───────────────────────────────────────────────────────────────
 gs = CONFIG['ground_scale']
 Entity(
     model='plane',
     scale=gs,
-    texture='grass',  # Textura mais detalhada
+    texture='grass',
     texture_scale=(gs, gs),
-    color=color.white,  # Cor mais clara para destacar o verme
+    color=color.white,
 )
 
 sky = Entity(
     model='sphere',
     scale=900,
     double_sided=True,
-    texture='sky_sunset',  # Textura de céu
+    texture='sky_sunset',
     color=color.white.tint(-0.2),
 )
 
@@ -90,46 +80,46 @@ ground_collider = Entity(
     y=0,
 )
 
-# ─── AMBIENTE (FONTES DE LUZ E CHUVA + OBSTÁCULOS) ────────────────────────────
+# ─── AMBIENTE (limpo default; gigante opt-in via --set=maze_enabled=1) ──────
 env = Environment()
-if FOOD_MODE:
-    # Lean MVP: labirinto manda (muros ficam); nada de luz/chuva/partículas
-    _maze_info = env.load_maze(MAZE_NAME, CONFIG.get('maze_file', 'labirintos.json'))
-    MAZE_SPAWN = _maze_info['spawn']
-    # T8: episódio 0 já respeita o currículo (perto do spawn se ligado)
+MAZE = None
+if CONFIG.get('maze_enabled', 0):
     try:
-        _d0 = env.food_max_dist(0)
-        env.randomize_food_near(MAZE_SPAWN.x, MAZE_SPAWN.z, _d0, n_foods=1)
-    except Exception:
-        pass
-else:
-    env.place_light(Vec3(10, 1, 10))
-    env.place_rain(Vec3(-10, 1, -10))
-    MAZE_SPAWN = None
-    if CONFIG['difficulty'] > 0:
-        env.randomize_obstacles(difficulty=CONFIG['difficulty'])
+        from maze import Maze as _Maze
+        MAZE = _Maze.load(CONFIG.get('maze_file', 'labirintos.json'),
+                          CONFIG.get('maze_key', 'gigante'))
+        env.maze = MAZE
+        print(f"  Labirinto '{CONFIG.get('maze_key')}' muros={len(MAZE.walls)}")
+    except Exception as e:
+        print(f"  AVISO maze_enabled=1 sem gigante valido ({e}) — limpo")
+        MAZE = None
+SPAWN = Vec3(0, 1.25, -12)
+try:
+    _d0 = env.food_max_dist(0)
+    env.randomize_food_near(SPAWN.x, SPAWN.z, _d0, n_foods=1)
+except Exception:
+    pass
 
 # ─── VERME ────────────────────────────────────────────────────────────────────
 worm = Worm()
 
-# Luz suave que segue o verme
 worm_light = PointLight(
     parent=worm.head,
-    color=color.cyan,  # Luz azul brilhante
+    color=color.cyan,
     position=(0, 5, 0),
     intensity=1.5,
 )
 
 # ─── CÂMERA ───────────────────────────────────────────────────────────────────
+# L17-mapa: distâncias dobradas p/ enquadrar o mapa 32 (era 16; scroll ajusta).
 cam_pivot = Entity()
-cam_pivot.y = 14
+cam_pivot.y = 20
 
 camera.parent = cam_pivot
-camera.position = (0, 40, -85)
+camera.position = (0, 60, -125)
 camera.rotation = (24, 0, 0)
 
-# ─── CÉREBRO: política estocástica (15 → 32 → 16 → 5 ações, Fase 12 enxuta) ───────
-# Lean: dimensão ativa (15 legado / 11 alimento); load_brain já descarta incompatível
+# ─── CÉREBRO: política 8 → 32 → 16 → 5 ações ──────────────────────────────────
 brain = PolicyNetwork(
     N_INPUTS_ACTIVE,
     CONFIG['n_hidden'],
@@ -138,19 +128,17 @@ brain = PolicyNetwork(
     n_hidden2=CONFIG.get('n_hidden2'),
 )
 
-# ─── CRÍTICO (Fase 8 — A2C): V(s) 15 → 32 → 16 → 1 (Fase 12 enxuta) ──────────────
+# ─── CRÍTICO: V(s) 8 → 32 → 16 → 1 ───────────────────────────────────────────
 critic = CriticNetwork(
     N_INPUTS_ACTIVE,
     CONFIG['n_hidden'],
     n_hidden2=CONFIG.get('n_hidden2'),
 )
 
-# ─── REPLAY BUFFER (Fase 13) ────────────────────────────────────────────────
+# ─── REPLAY BUFFER ────────────────────────────────────────────────────────────
 replay_buffer = ReplayBuffer(max_episodes=CONFIG.get('buffer_max_episodes', 50))
 
-# ─── MODO AVALIAÇÃO: testa a política SALVA (pesos.json) ───────────────────
-# A avaliação carrega o cérebro treinado e usa a temperatura de decisão (piso
-# do treino): política determinística, representativa do que foi aprendido.
+# ─── MODO AVALIAÇÃO ───────────────────────────────────────────────────────────
 if EVAL_MODE:
     if os.path.exists(CONFIG['weights_file']):
         load_brain(CONFIG['weights_file'], brain, critic)
@@ -159,69 +147,124 @@ if EVAL_MODE:
         print(f"  ATENCAO: {CONFIG['weights_file']} nao existe — avaliando cerebro aleatorio")
     brain.temperature = CONFIG['min_temperature']
 
-# ─── MODO VISUALIZAÇÃO: passeio livre, sem treino nem professor ────────────
 if VISUAL_MODE:
     brain.temperature = CONFIG['min_temperature']
     print("  MODO VISUALIZACAO: sem treino, professor desligado, só passeio")
+    print(f"  build diag-frio-1 (teleport+bounce+pos/dir/dt no HUD) arq={__file__}")
+
+if PRESENT_MODE:
+    brain.temperature = CONFIG['min_temperature']
+    print("  MODO APRESENTACAO: HUD didático, sem treino, sem números de treino")
 
 # ─── MODO DE EDIÇÃO ───────────────────────────────────────────────────────────
 editor = {'mode': 'none'}
 
-# ─── ESTADO DO VERME ──────────────────────────────────────────────────────────
+# ─── ESTADO ───────────────────────────────────────────────────────────────────
 state = {
     'total_reward'    : 0.0,
     'log_timer'       : 0.0,
-    'rain_pulse'      : 0.0,
-    'pulse_timer'     : 0.0,
-    'prev_dist_light' : None,
-    'prev_dist_rain'  : None,
-    'prev_dist_food'  : None,  # Lean alimento (só usado em FOOD_MODE)
-    'prev_dist_obs'   : None,
+    'prev_dist_food'  : None,
     'prev_position'   : None,
-    'hunger'          : 0.0,   # E4: 0 saciado → 1 faminto; zera ao comer
-    'hunger_rate'     : CONFIG.get('hunger_rate', 0.002),
-    'encontros_food'  : 0,     # nº de vezes que comeu no episódio
-    'passos_ate_comer': None,  # passo do 1º encontro (métrica primária E6)
-    'steps_in_obstacle': 0,  # Fase 15
-    'difficulty'      : CONFIG['difficulty'],
-    'episode'         : [],     # (sensors, action, reward, acao_professor) — Fases 3/4
-    'episode_count'   : 0,      # quantos episódios já treinaram
-    'force_autonomy'  : False,  # tecla A: professor desligado (autonomia forçada = 1)
-    'steps_in_rain'   : 0,      # métricas do episódio (critério de aceite da Fase 4)
-    'steps_in_danger' : 0,
-    'episode_rewards' : [],     # recompensas totais por episódio (rolling no HUD)
-    'action_history'  : [],     # Fase 7: últimas N ações (anti-colapso)
+    'hunger'          : 0.0,   # 0 saciado → 1 faminto; zera ao comer
+    'hunger_rate'     : CONFIG.get('hunger_rate', 0.001),
+    'encontros_food'  : 0,
+    'passos_ate_comer': None,  # passo do 1º encontro (métrica primária)
+    'episode'         : [],     # (sensors, action, reward, acao_professor)
+    'episode_count'   : 0,
+    'force_autonomy'  : False,  # tecla A: professor desligado
+    'episode_rewards' : [],
+    'action_history'  : [],
+    'encontros_hist'  : [],     # encontros por episódio (taxa de sucesso)
+    'foods_eaten_total': 0,     # contador didático (visual/apresentação)
+    'present_eating_flash': 0.0,  # timer do "COMENDO!" na apresentação
 }
+# Última ação p/ HUD (evita KeyError no 1º frame antes do update).
+_last_action = [2]
 
-if EVAL_MODE or VISUAL_MODE:
+if EVAL_MODE or VISUAL_MODE or PRESENT_MODE:
     state['force_autonomy'] = True
 
-# ─── LOG DE EPISÓDIOS (curva de aprendizado, critério de aceite da Fase 3/4) ─
-# Lean: entrega rápida — mantém 15 colunas legadas + 3 novas no fim (compat).
-# Pergunta-base usa encontro_food/passos_ate_comer/maze; chegada_chuva em
-# FOOD_MODE espelha encontro (compat com scripts antigos).
-log_csv = open(CONFIG['log_csv'], 'w', newline='')
-csv_writer = csv.writer(log_csv)
-csv_writer.writerow(['episodio', 'estagio', 'recompensa_total', 'recompensa_media',
-                     'retorno_medio', 'entropia_media', 'learning_rate',
-                     'lambda_imitacao', 'autonomia_forcada',
-                     'chegada_chuva', 'perigo_luz', 'colisao_obs', 'acao_principal', 'semente', 'dificuldade',
-                     'encontro_food', 'passos_ate_comer', 'maze'])
+# ─── LOG DE EPISÓDIOS ─────────────────────────────────────────────────────────
+# Visualização e Apresentação são só passeio: não truncam nem escrevem CSV.
+if VISUAL_MODE or PRESENT_MODE:
+    log_csv = None
+    csv_writer = None
+else:
+    log_csv = open(CONFIG['log_csv'], 'w', newline='')
+    csv_writer = csv.writer(log_csv)
+    csv_writer.writerow(['episodio', 'estagio', 'recompensa_total', 'recompensa_media',
+                         'retorno_medio', 'entropia_media', 'learning_rate',
+                         'lambda_imitacao', 'autonomia_forcada',
+                         'encontros_food', 'passos_ate_comer',
+                         'acao_principal', 'semente'])
 
-# ─── HUD (Fase 5) ─────────────────────────────────────────────────────────────
-hud = Text(
+# ─── HUD (3 camadas: selo do modo + painel principal + ajuda) ───────────────
+# Foco é sempre o verme: painéis pequenos, semi-transparentes, nos cantos.
+MODE_META = {
+    'TREINO'      : {'cor': color.orange, 'simbolo': '●'},
+    'AVALIACAO'   : {'cor': color.azure,  'simbolo': '◆'},
+    'VISUALIZACAO': {'cor': color.lime,   'simbolo': '○'},
+    'APRESENTACAO': {'cor': color.yellow, 'simbolo': '★'},
+}
+
+
+def _mode_key():
+    if PRESENT_MODE:
+        return 'APRESENTACAO'
+    if VISUAL_MODE:
+        return 'VISUALIZACAO'
+    if EVAL_MODE:
+        return 'AVALIACAO'
+    return 'TREINO'
+
+
+badge = Text(
     text='',
     position=(-0.85, 0.47),
-    origin=(0, 0),
+    origin=(-0.5, 0.5),
+    scale=1.6,
+    color=color.white,
+    background_color=Color(0, 0, 0, 0.65),
+)
+hud = Text(
+    text='',
+    position=(-0.85, 0.36),
+    origin=(-0.5, 0.5),
     scale=1,
     color=color.white,
     background_color=Color(0, 0, 0, 0.55),
 )
+footer = Text(
+    text='',
+    position=(-0.85, -0.44),
+    origin=(-0.5, -0.5),
+    scale=0.85,
+    color=Color(1, 1, 1, 0.85),
+    background_color=Color(0, 0, 0, 0.45),
+)
+
+ACTION_ARROW = ['◀', '◁', '▲', '▷', '▶']
+ACTION_PT = ['virando à esquerda', 'virando de leve à esquerda',
+             'andando em frente', 'virando de leve à direita',
+             'virando à direita']
+
+
+def _bar(frac, width=10):
+    """Barra textual 0..1, ex: ████░░░░░░."""
+    frac = max(0.0, min(1.0, float(frac or 0.0)))
+    full = int(round(frac * width))
+    return '█' * full + '░' * (width - full)
+
+
+def _food_info():
+    """(distância, cheiro) até o alimento mais próximo — didático e útil."""
+    d = _nearest_dist(worm.head.position, getattr(env, 'food_sources', []))
+    if d is None:
+        return None, 0.0
+    return d, 1.0 / (1.0 + d)
 
 
 # ─── MOVIMENTO POR GIRO (ações discretas) ─────────────────────────────────────
-# Cada ação vira o verme no plano XZ por um múltiplo da taxa máxima:
-#   esquerda(−1)  frente_esquerda(−0.5)  frente(0)  frente_direita(+0.5)  direita(+1)
 TURN_MULTIPLIERS = [-1.0, -0.5, 0.0, 0.5, 1.0]
 
 
@@ -248,51 +291,8 @@ def turn_vector(direction, angle):
     )
 
 
-# ─── PROFESSOR (CAMPOS DE POTENCIAL) ──────────────────────────────────────────
-def get_target_direction():
-    """
-    Direção ideal de movimento ("professor"), por campos de potencial.
-
-    Contrato da Fase 1: o comportamento desejado é CHEGAR à chuva e FUGIR da
-    luz. A "órbita" ao redor da chuva foi removida — a meta é chegar e
-    permanecer perto, não circular.
-    """
-    combined = Vec3(0, 0, 0)
-
-    # ── Atração pelas fontes de chuva ─────────────────────────────────────────
-    for rs in env.rain_sources:
-        to_rain = rs.position - worm.head.position
-        dist    = to_rain.length()
-        if dist > 0.01:
-            # Peso inversamente proporcional à distância: fontes próximas
-            # atraem mais do que fontes distantes
-            weight    = max(0.0, 1.0 - (dist / CONFIG['sensor_max_dist']))
-            combined += to_rain.normalized() * weight
-
-    # ── Repulsão pelas fontes de luz ──────────────────────────────────────────
-    for ls in env.light_sources:
-        from_light = worm.head.position - ls.position
-        dist       = from_light.length()
-        if dist > 0.01:
-            weight    = max(0.0, 1.0 - (dist / CONFIG['light_repel_dist']))
-            combined += from_light.normalized() * weight
-
-    # ── Fuga das bordas (anti-encalhe, Fase 6) ────────────────────────────────
-    # Se o verme estiver perto de uma parede, o professor empurra de volta para
-    # o centro — evita ficar "engessado" contra o limite do mapa.
-    _add_edge_avoidance(combined)
-
-    # ── Desvio de obstáculos (Fase 15) — professor contorna a pedra
-    _add_obstacle_avoidance(combined)
-
-    if Vec3(combined).length() > 0.01:
-        return Vec3(combined).normalized()
-
-    return worm.direction
-
-
+# ─── PROFESSOR (campo de potencial unimodal: só atração) ──────────────────────
 def _add_edge_avoidance(combined):
-    """Lean: trecho compartilhado legado/alimento (evita duplicar 15 linhas)."""
     margin = CONFIG['wall_margin']
     limit = CONFIG['map_limit']
     p = worm.head.position
@@ -306,69 +306,30 @@ def _add_edge_avoidance(combined):
         combined += Vec3(0, 0, -1) * (1.0 + (p.z - (limit - margin)) / margin)
 
 
-def _add_obstacle_avoidance(combined):
-    """Lean: trecho compartilhado legado/alimento (contorno de pedras/muros)."""
-    for obs in getattr(env, 'obstacles', []):
-        to_obs = obs.position - worm.head.position
-        d = to_obs.length()
-        avoid_r = CONFIG['obstacle_radius'] * 2.2
-        if 0.1 < d < avoid_r:
-            away = (worm.head.position - obs.position).normalized()
-            lateral = Vec3(away.z, 0, -away.x)  # tangente para contornar
-            weight = (avoid_r - d) / avoid_r
-            combined += away * weight * 1.4 + lateral * weight * 0.6
-
-
-def get_food_target_direction():
-    """Lean MVP: professor unimodal — só atração ao alimento + bordas + muros.
-
-    Sem repulsão de luz (E1). Reusa _add_edge/obstacle para não duplicar código.
-    """
+def get_target_direction():
+    """Direção ideal: atração ao alimento + fuga de bordas (terreno limpo)."""
     combined = Vec3(0, 0, 0)
-    foods = getattr(env, 'food_sources', []) or getattr(env, 'rain_sources', [])
-    for fs in foods:
+    for fs in getattr(env, 'food_sources', []):
         to_food = fs.position - worm.head.position
         dist = to_food.length()
         if dist > 0.01:
             weight = max(0.0, 1.0 - (dist / CONFIG['sensor_max_dist']))
             combined += to_food.normalized() * weight
     _add_edge_avoidance(combined)
-    _add_obstacle_avoidance(combined)
     if Vec3(combined).length() > 0.01:
         return Vec3(combined).normalized()
     return worm.direction
 
 
-def get_sensors():
-    """Lean dispatch: 11-dim alimento em FOOD_MODE, 15-dim legado senão."""
-    if FOOD_MODE:
-        return get_food_sensor_inputs(worm, env, state)
-    return get_sensor_inputs(worm, env, state)
-
-
-def get_step_reward():
-    """Lean dispatch de recompensa (mantém legado intacto por padrão)."""
-    if FOOD_MODE:
-        return calculate_food_reward(worm, env, state)
-    return calculate_reward(worm, env, state)
-
-
 def get_teacher_dir():
-    """Lean dispatch do professor."""
-    if FOOD_MODE:
-        return get_food_target_direction()
     return get_target_direction()
 
 
-# ─── CURRÍCULO DE AUTONOMIA (Fase 4) ─────────────────────────────────────────
-# Estágio A — Imitação (warm-up): professor demonstra, rede aprende por CE.
-# Estágio B — Híbrido: REINFORCE + λ·CE (λ decai), autonomia sobe 0→1.
-# Estágio C — Autonomia plena: λ = 0, professor desligado (tecla A confirma).
+# ─── CURRÍCULO DE AUTONOMIA ───────────────────────────────────────────────────
 STAGE_NAMES = {'A': 'IMITACAO', 'B': 'HIBRIDO', 'C': 'AUTONOMO'}
 
 
 def current_stage():
-    """Estágio do currículo com base no número de episódios já treinados."""
     n = state['episode_count']
     if n < CONFIG['stage_a_episodes']:
         return 'A'
@@ -378,21 +339,17 @@ def current_stage():
 
 
 def lambda_imitation():
-    """Peso λ da imitação no híbrido (Estágio B), decaindo até 0 no Estágio C."""
     stage = current_stage()
     if stage == 'B':
         k = state['episode_count'] - CONFIG['stage_a_episodes']
         return CONFIG['lambda_start'] * (CONFIG['lambda_decay'] ** k)
     if stage == 'C':
-        # T7 DAGGER-âncora (opt-in, padrão 0=legado): micro-peso do professor
-        # impede a deriva total da política sem custo de exploração extra.
         return float(CONFIG.get('lambda_c', 0.0) or 0.0)
     return 0.0
 
 
 def teacher_action():
-    """A ação discreta ideal do professor — alvo da imitação (CE)."""
-    target_dir = get_teacher_dir()  # Lean: legado ou alimento conforme FOOD_MODE
+    target_dir = get_teacher_dir()
     desired = signed_angle(worm.direction, target_dir)
     max_turn = CONFIG['turn_rate'] * time.dt
     best, best_err = 0, float('inf')
@@ -404,7 +361,6 @@ def teacher_action():
 
 
 def _nearest_dist(position, sources):
-    """Distância da posição até a fonte mais próxima (ou None)."""
     best = None
     for s in sources:
         d = (position - s.position).length()
@@ -414,7 +370,6 @@ def _nearest_dist(position, sources):
 
 
 def episode_stats(brain, episode):
-    """Estatísticas de um episódio para o log (usado no Estágio A / imitação)."""
     counts = [0] * CONFIG['n_actions']
     total_r = 0.0
     ent = 0.0
@@ -431,10 +386,7 @@ def episode_stats(brain, episode):
     }
 
 
-# ─── VISUALIZAÇÃO DA POLÍTICA (Fase 5, tecla P) ───────────────────────────────
-# Grade de setas sobre o mapa: em cada célula, mostra para onde a política
-# "quer ir" (ação mais provável, assumindo o verme virado para +Z) e pinta de
-# verde/vermelho conforme a direção aproxime da chuva ou da luz.
+# ─── VISUALIZAÇÃO DA POLÍTICA (tecla P) ───────────────────────────────────────
 policy_grid = {'visible': False, 'pivots': []}
 
 
@@ -443,11 +395,11 @@ def _fake_worm_at(x, z):
         position = Vec3(x, 0, z)
     class _Worm:
         head = _Head()
+        direction = Vec3(0, 0, 1)
     return _Worm()
 
 
 def build_policy_grid():
-    """Cria os pivôs (seta + cabo) da grade, uma vez."""
     n = CONFIG['grid_cells']
     span = CONFIG['map_limit'] * 1.85
     step = span / max(1, n - 1)
@@ -465,7 +417,6 @@ def build_policy_grid():
 
 
 def refresh_policy_grid():
-    """Recomputa a seta e a cor de cada célula com a política atual."""
     n = CONFIG['grid_cells']
     span = CONFIG['map_limit'] * 1.85
     step = span / max(1, n - 1)
@@ -479,36 +430,23 @@ def refresh_policy_grid():
             probs = brain.probabilities(sensors)
             action = max(range(len(probs)), key=lambda a: probs[a])
 
-            # Direção resultante da ação mais provável (virado para +Z)
             max_turn = CONFIG['turn_rate'] * 0.016
             newdir = turn_vector(Vec3(0, 0, 1), TURN_MULTIPLIERS[action] * max_turn)
             pivot.rotation_y = math.degrees(math.atan2(newdir.x, newdir.z))
 
-            # Cor: verde se aponta p/ chuva, laranja se perto de obstáculo, vermelho se p/ luz
-            to_rain = _nearest_dist(pivot.position, env.rain_sources)
-            to_light = _nearest_dist(pivot.position, env.light_sources)
-            to_obs = _nearest_dist(pivot.position, env.obstacles)
             c = color.gray
-            if to_rain is not None:
+            foods = getattr(env, 'food_sources', [])
+            if foods:
                 d = Vec3(pivot.position.x, 0, pivot.position.z)
-                r = min(env.rain_sources, key=lambda s: (Vec3(s.x, 0, s.z) - d).length())
-                toward_rain = (Vec3(r.x, 0, r.z) - d).normalized()
-                if newdir.dot(toward_rain) > 0.25:
+                f = min(foods, key=lambda s: (Vec3(s.x, 0, s.z) - d).length())
+                toward = (Vec3(f.x, 0, f.z) - d).normalized()
+                if newdir.dot(toward) > 0.25:
                     c = color.lime
-            if to_light is not None:
-                d = Vec3(pivot.position.x, 0, pivot.position.z)
-                l = min(env.light_sources, key=lambda s: (Vec3(s.x, 0, s.z) - d).length())
-                toward_light = (Vec3(l.x, 0, l.z) - d).normalized()
-                if newdir.dot(toward_light) > 0.25:
-                    c = color.red.tint(-0.2)
-            if to_obs is not None and to_obs < CONFIG['obstacle_radius'] * 1.5:
-                c = color.orange
             for child in pivot.children:
                 child.color = c
 
 
 def toggle_policy_grid():
-    """Mostra/esconde a grade de setas (recalculada ao ligar)."""
     if not policy_grid['pivots']:
         build_policy_grid()
     policy_grid['visible'] = not policy_grid['visible']
@@ -519,110 +457,156 @@ def toggle_policy_grid():
     print(f"  Grade da politica {'LIGADA' if policy_grid['visible'] else 'DESLIGADA'}")
 
 
-# ─── HUD (Fase 5) ─────────────────────────────────────────────────────────────
+# ─── HUD ──────────────────────────────────────────────────────────────────────
+def _paint_badge():
+    key = _mode_key()
+    meta = MODE_META[key]
+    badge.color = meta['cor']
+    if key == 'APRESENTACAO':
+        badge.text = f"{meta['simbolo']}  APRESENTAÇÃO  —  Neurônio de Verme"
+    elif key == 'VISUALIZACAO':
+        badge.text = f"{meta['simbolo']}  VISUALIZAÇÃO"
+    elif key == 'AVALIACAO':
+        badge.text = f"{meta['simbolo']}  AVALIAÇÃO  ·  sem treino"
+    else:
+        badge.text = f"{meta['simbolo']}  TREINO"
+
+
+def _success_rate(window=10):
+    hist = state.get('encontros_hist', [])
+    tail = hist[-window:] if hist else []
+    if not tail:
+        return None
+    return sum(1 for e in tail if e > 0) / len(tail)
+
+
 def update_hud():
-    """Atualiza o texto na tela com as métricas do aprendizado."""
+    """Painel de trabalho: treino ou avaliação. Compacto, só o útil."""
+    _paint_badge()
     window = CONFIG['rolling_window']
     rolling = state['episode_rewards'][-window:]
     media = sum(rolling) / len(rolling) if rolling else 0.0
     stage = current_stage()
-    ent = entropy(brain.last_probs) if brain.last_probs else 0.0
-    lvl = CONFIG['difficulty_levels'].get(state['difficulty'], CONFIG['difficulty_levels'][1])
-    if FOOD_MODE:
-        # Lean: HUD mínimo do alimento (maze + encontros, sem luz/chuva)
+    passo = len(state['episode'])
+    total_steps = CONFIG['episode_steps']
+    dist, smell = _food_info()
+    dist_txt = f"{dist:.1f}m" if dist is not None else "—"
+    taxa = _success_rate(window)
+    p1 = state['passos_ate_comer']
+    fome = state.get('hunger', 0.0)
+
+    if EVAL_MODE:
+        linha_ep = f"ep {state['episode_count']+1}  ·  passo {passo}/{total_steps}"
+        linha_sucesso = (f"encontros {state['encontros_food']}  ·  "
+                         f"1º em {p1 if p1 is not None else '—'}  ·  "
+                         f"sucesso({len(rolling)}/{window}): "
+                         f"{taxa*100:.0f}%" if taxa is not None else
+                         f"encontros {state['encontros_food']}")
         hud.text = (
-            f"episodio : {state['episode_count']}  maze:{MAZE_NAME}\n"
-            f"estagio  : {stage} ({STAGE_NAMES[stage]})\n"
-            f"encontros: {state['encontros_food']}  passos1o:{state['passos_ate_comer']}\n"
-            f"recompensa media (roll {len(rolling)}/{window}): {media:+.2f}\n"
-            f"entropia : {ent:.3f}  lr:{brain.learning_rate:.5f}  temp:{brain.temperature:.3f}\n"
-            f"professor: {'desligado' if state['force_autonomy'] else 'ligado'}  "
-            f"modo:{'AVALIACAO' if EVAL_MODE else 'TREINO'}"
+            f"{linha_ep}\n"
+            f"{linha_sucesso}\n"
+            f"recomp. média: {media:+.2f}  ·  total ep: {state['total_reward']:+.1f}\n"
+            f"comida {dist_txt}  ·  faro {smell:.2f}  ·  {ACTION_ARROW[_last_action[0]]} {ACTIONS[_last_action[0]]}\n"
         )
-        return
-    hud.text = (
-        f"episodio : {state['episode_count']}\n"
-        f"estagio  : {stage} ({STAGE_NAMES[stage]})\n"
-        f"nivel    : {lvl['label']} ({state['difficulty']})  obs:{len(env.obstacles)}\n"
-        f"recompensa media (roll {len(rolling)}/{window}): {media:+.2f}\n"
-        f"entropia : {ent:.3f}\n"
-        f"learning rate: {brain.learning_rate:.5f}\n"
-        f"temperatura  : {brain.temperature:.3f}\n"
-        f"professor: {'desligado' if state['force_autonomy'] else 'ligado'}\n"
-        f"modo     : {'AVALIACAO' if EVAL_MODE else 'TREINO'}"
-    )
+        footer.text = "scroll zoom  ·  botão direito orbita  ·  R reinicia  ·  ESC sai"
+    else:
+        # Autonomia atual (mesma conta do update, p/ exibir sem duplicar lógica lá)
+        if stage == 'A':
+            autonomia = 0.0
+        elif stage == 'B':
+            k = state['episode_count'] - CONFIG['stage_a_episodes']
+            autonomia = min(1.0, (k + 1) / CONFIG['stage_b_episodes'])
+        else:
+            autonomia = 1.0
+        if state['force_autonomy']:
+            autonomia = 1.0
+        prof = 'DESLIGADO (A p/ ligar)' if state['force_autonomy'] else 'LIGADO (A p/ desligar)'
+        hud.text = (
+            f"ep {state['episode_count']+1}  ·  {stage} {STAGE_NAMES[stage]}  ·  autonomia {autonomia*100:.0f}%\n"
+            f"passo {passo}/{total_steps}  ·  encontros {state['encontros_food']}  ·  1º em {p1 if p1 is not None else '—'}\n"
+            f"recomp. média({len(rolling)}/{window}): {media:+.2f}  ·  fome {_bar(fome, 6)} {fome*100:.0f}%\n"
+            f"comida {dist_txt}  ·  faro {smell:.2f}  ·  {ACTION_ARROW[_last_action[0]]} {ACTIONS[_last_action[0]]}\n"
+            f"professor {prof}\n"
+        )
+        footer.text = "A professor  ·  P grade  ·  S/L salva/carrega  ·  1/3 editor  ·  ESC sai"
 
 
 def update_hud_aquarium(action):
-    """HUD do aquário: só observação, sem contagem de época."""
-    lvl = CONFIG['difficulty_levels'].get(state['difficulty'], CONFIG['difficulty_levels'][1])
-    ent = entropy(brain.last_probs) if brain.last_probs else 0.0
-    # Ação mais provável
+    """Painel da Visualização: observar o comportamento, sem números de treino."""
+    _paint_badge()
     probs = brain.last_probs
-    top = max(range(len(probs)), key=lambda a: probs[a]) if probs else action
+    conf = max(probs) * 100 if probs else 0.0
+    dist, smell = _food_info()
+    dist_txt = f"{dist:.1f}m" if dist is not None else "—"
+    # Diagnóstico de movimento (some quando o bug congelar estiver resolvido):
+    # se pos não muda com dir≠0 e dt>0, o problema é fora da lógica (cena/engine).
+    _dd = worm.direction
     hud.text = (
-        f"AQUARIO — observacao pura\n"
-        f"nivel    : {lvl['label']} ({state['difficulty']})  obs:{len(env.obstacles)}\n"
-        f"acao     : {ACTIONS[action]} (top {ACTIONS[top]} {max(probs)*100:.0f}%)\n"
-        f"entropia : {ent:.3f}  temp:{brain.temperature:.2f}\n"
-        f"pos      : x{worm.head.x:+.1f} z{worm.head.z:+.1f}\n"
-        f"chuva    : {(_nearest_dist(worm.head.position, env.rain_sources) or 0):.1f}  "
-        f"luz:{(_nearest_dist(worm.head.position, env.light_sources) or 0):.1f}  "
-        f"obs:{(_nearest_dist(worm.head.position, env.obstacles) or 99):.1f}\n"
-        f"O=cicla nivel  P=grade  R=reset  ESC=sair"
+        f"{ACTION_ARROW[action]}  {ACTION_PT[action]}  (certeza {conf:.0f}%)\n"
+        f"comida verde a {dist_txt}  ·  faro {smell:.2f}\n"
+        f"comidas até aqui: {state.get('foods_eaten_total', 0)}\n"
+        f"pos x{worm.head.position.x:+.1f} z{worm.head.position.z:+.1f}"
+        f"  dir({_dd.x:+.2f},{_dd.z:+.2f})|d|={_dd.length():.2f}"
+        f"  dt={time.dt*1000:.1f}ms\n"
     )
+    footer.text = "só observando  ·  P grade  ·  R reinicia  ·  scroll zoom  ·  ESC sai"
+
+
+def update_hud_present(action):
+    """Painel da Apresentação: só o didático. NADA de treino/avaliação."""
+    _paint_badge()
+    dist, smell = _food_info()
+    dist_txt = f"{dist:.1f}m" if dist is not None else "—"
+    flash = state.get('present_eating_flash', 0.0)
+    if flash > 0:
+        status = "COMENDO!  A fome zerou e nasceu outra comida."
+    elif dist is not None and dist < CONFIG.get('food_radius', 3.0) + 2.0:
+        status = "Chegou pertinho — vai comer!"
+    elif smell > 0.08:
+        status = "Sentiu o cheiro e está se aproximando..."
+    else:
+        status = "Procurando a comida pelo faro..."
+    hud.text = (
+        f"O verme está {status}\n"
+        f"● comida verde a {dist_txt}  ·  faro {smell:.2f}  ·  {ACTION_ARROW[action]} {ACTION_PT[action]}\n"
+        f"comidas: {state.get('foods_eaten_total', 0)}\n"
+    )
+    footer.text = "azul = verme  ·  verde = comida  ·  scroll zoom  ·  botão direito gira  ·  ESC sai"
 
 
 # ─── REINICIAR ────────────────────────────────────────────────────────────────
 def reset():
-    """Reinicia o verme e o cérebro sem fechar o programa."""
     worm.reset()
+    worm.teleport(SPAWN)
     state.update({
         'total_reward'    : 0.0,
         'log_timer'       : 0.0,
-        'rain_pulse'      : 0.0,
-        'pulse_timer'     : 0.0,
-        'prev_dist_light' : None,
-        'prev_dist_rain'  : None,
         'prev_dist_food'  : None,
-        'prev_dist_obs'   : None,
         'prev_position'   : None,
         'hunger'          : 0.0,
         'encontros_food'  : 0,
         'passos_ate_comer': None,
         'episode'         : [],
         'episode_count'   : 0,
-        'steps_in_rain'   : 0,
-        'steps_in_danger' : 0,
-        'steps_in_obstacle': 0,
         'episode_rewards' : [],
+        'encontros_hist'  : [],
+        'foods_eaten_total': 0,
+        'present_eating_flash': 0.0,
     })
+    _last_action[0] = 2
     brain.reset()
     print("\n-- Reiniciado -----------------------------------------\n")
 
 
-# ─── FIM DE EPISÓDIO (treino por estágio do currículo — Fase 4) ──────────────
+# ─── FIM DE EPISÓDIO ──────────────────────────────────────────────────────────
 def finish_episode():
-    """
-    Treina a política conforme o estágio do currículo e monta uma cena nova.
-
-    Estágio A — Imitação: cross-entropy supervisionada com a ação do professor.
-    Estágio B — Híbrido:  REINFORCE + λ·CE (λ decai), autonomia sobe 0→1.
-    Estágio C — Autônomo: REINFORCE puro (λ = 0), professor desligado.
-    """
     stage = current_stage()
     lam = lambda_imitation()
 
-    if EVAL_MODE or VISUAL_MODE:
-        # Avaliacao/Visualizacao: professor desligado e SEM treino -- so mede.
-        stats = episode_stats(brain, state['episode'])
-        # Imitacao pura: um passo de CE por passo do episodio (acao do professor)
-        for sensors, _, _, t_action in state['episode']:
-            brain.imitate(sensors, t_action)
+    if EVAL_MODE:
+        # Avaliação: só mede, SEM treino.
         stats = episode_stats(brain, state['episode'])
     else:
-        # ── Fase 13: Replay Buffer ──────────────────────────────────────────
-        # 1) Coleta V(s), GAE advantages, returns e π_old(a|s) para este episodio
         scaled_rewards = [r * CONFIG['reward_scale'] for _, _, r, _ in state['episode']]
         values = []
         for sensors, *_ in state['episode']:
@@ -630,18 +614,15 @@ def finish_episode():
         advantages = compute_gae(scaled_rewards, values, CONFIG['gamma'],
                                 CONFIG['gae_lambda'])
         returns = [a + v for a, v in zip(advantages, values)]
-        # π_old(a|s): probabilidade da ação tomada sob a política atual
         old_probs_list = []
         for sensors, action, *_ in state['episode']:
             brain.probabilities(sensors)
             old_probs_list.append(brain.last_probs[action])
 
-        # 2) Adiciona episodio ao replay buffer (com returns e old_probs)
         replay_buffer.add_episode(state['episode'], advantages,
                                   returns=returns, old_probs=old_probs_list)
 
-        # 3) Treina — buffer só em modo batch (--episodes), interativo usa PPO direto (fluido)
-        use_buffer = (EVAL_EPISODES is not None) and len(replay_buffer) >= CONFIG.get('buffer_min_transitions', 200)
+        use_buffer = (EPISODE_LIMIT is not None) and len(replay_buffer) >= CONFIG.get('buffer_min_transitions', 200)
         if use_buffer:
             stats = brain.ppo_update_from_buffer(
                 replay_buffer, critic,
@@ -657,10 +638,8 @@ def finish_episode():
                                          gae_lambda=CONFIG['gae_lambda'],
                                          ppo_clip=CONFIG['ppo_clip'])
 
-    if not EVAL_MODE and not VISUAL_MODE:
+    if not EVAL_MODE:
         brain.learning_rate *= CONFIG['lr_decay']
-        # Exploração estruturada (boltzmann): temperatura decai a cada episódio,
-        # mas nunca zera — a política nunca fica 100% greedy (anti-colapso).
         brain.temperature = max(
             CONFIG['min_temperature'],
             brain.temperature * CONFIG['temperature_decay'],
@@ -669,63 +648,43 @@ def finish_episode():
     state['episode_count'] += 1
     total = sum(r for _, _, r, _ in state['episode'])
     state['episode_rewards'].append(total)
-    h = max(1, len(state['episode']))
+    state['encontros_hist'].append(state['encontros_food'])
     principal = max(range(len(stats['action_counts'])),
                     key=lambda a: stats['action_counts'][a])
-    csv_writer.writerow([
-        state['episode_count'],
-        stage,
-        round(total, 3),
-        round(stats['mean_reward'], 4),
-        round(stats['mean_return'], 3),
-        round(stats['mean_entropy'], 3),
-        round(brain.learning_rate, 5),
-        round(lam, 3) if lam > 0 else 0.0,
-        int(state['force_autonomy']),
-        round(state['steps_in_rain'] / h, 3),
-        round(state['steps_in_danger'] / h, 3),
-        round(state['steps_in_obstacle'] / h, 3),
-        ACTIONS[principal],
-        CONFIG['seed'],
-        state['difficulty'],
-        # Lean: novas colunas (0 em modo legado); chegada_chuva espelha encontro em FOOD_MODE
-        state['encontros_food'] if FOOD_MODE else 0,
-        state['passos_ate_comer'] if state['passos_ate_comer'] is not None else '',
-        MAZE_NAME if MAZE_NAME else '',
-    ])
-    log_csv.flush()
+    if csv_writer is not None:
+        csv_writer.writerow([
+            state['episode_count'],
+            stage,
+            round(total, 3),
+            round(stats['mean_reward'], 4),
+            round(stats['mean_return'], 3),
+            round(stats['mean_entropy'], 3),
+            round(brain.learning_rate, 5),
+            round(lam, 3) if lam > 0 else 0.0,
+            int(state['force_autonomy']),
+            state['encontros_food'],
+            state['passos_ate_comer'] if state['passos_ate_comer'] is not None else '',
+            ACTIONS[principal],
+            CONFIG['seed'],
+        ])
+        log_csv.flush()
 
     actions = ' '.join(f"{ACTIONS[a][:6]}:{c}" for a, c in enumerate(stats['action_counts']))
-    lvl = CONFIG['difficulty_levels'][state['difficulty']]['label']
-    if FOOD_MODE:
-        print(
-            f"\n-- Episodio {state['episode_count']} [estagio {stage}: {STAGE_NAMES[stage]}][maze:{MAZE_NAME}] -----\n"
-            f"  total={total:+.1f}  media={stats['mean_reward']:+.4f}  "
-            f"entropia={stats['mean_entropy']:.3f}  lr={brain.learning_rate:.5f}\n"
-            f"  encontros_food={state['encontros_food']}  "
-            f"passos_ate_comer={state['passos_ate_comer']}  "
-            f"colisao_obs={state['steps_in_obstacle']/h:.2f}\n"
-            f"  acoes: {actions}\n"
-        )
-    else:
-        print(
-        f"\n-- Episodio {state['episode_count']} [estagio {stage}: {STAGE_NAMES[stage]}][{lvl}] -----\n"
+    print(
+        f"\n-- Episodio {state['episode_count']} [estagio {stage}: {STAGE_NAMES[stage]}] -----\n"
         f"  total={total:+.1f}  media={stats['mean_reward']:+.4f}  "
         f"entropia={stats['mean_entropy']:.3f}  lr={brain.learning_rate:.5f}\n"
-        f"  lambda_imit={lam:.3f}  chegada_chuva={state['steps_in_rain']/h:.2f}  "
-        f"perigo_luz={state['steps_in_danger']/h:.2f}  colisao_obs={state['steps_in_obstacle']/h:.2f}\n"
+        f"  encontros_food={state['encontros_food']}  "
+        f"passos_ate_comer={state['passos_ate_comer']}\n"
         f"  acoes: {actions}\n"
     )
 
-    # Limite de episódios (treino com --episodes=N ou avaliação): salva e fecha
-    if EVAL_EPISODES and state['episode_count'] >= EVAL_EPISODES:
+    if EPISODE_LIMIT and state['episode_count'] >= EPISODE_LIMIT:
         save_brain(CONFIG['weights_file'], brain, critic)
-        print(f"\n-- Concluido ({EVAL_EPISODES} episodios): pesos salvos em {CONFIG['weights_file']}")
+        print(f"\n-- Concluido ({EPISODE_LIMIT} episodios): pesos salvos em {CONFIG['weights_file']}")
         quit()
 
-    # Fase 10: checkpoint periódico anti-perda (exp #14 perdeu 419eps sem save).
-    # Salva no mesmo weights_file para --eval retomar de onde parou.
-    if not EVAL_MODE and not VISUAL_MODE:
+    if not EVAL_MODE:
         _ckpt = CONFIG.get('checkpoint_interval', 50)
         if _ckpt and state['episode_count'] % _ckpt == 0:
             try:
@@ -734,78 +693,42 @@ def finish_episode():
             except Exception as e:
                 print(f"  [checkpoint ep{state['episode_count']}] FALHA ao salvar: {e}")
 
-    if FOOD_MODE:
-        # Lean: NUNCA randomize_sources/obstacles aqui (destruiria o labirinto).
-        # T8: alimento a até schedule(ep) do spawn (perto→longe); desligado=legado.
-        _maxd = env.food_max_dist(state['episode_count'])
-        try:
-            env.randomize_food_near(MAZE_SPAWN.x, MAZE_SPAWN.z, _maxd, n_foods=1)
-        except Exception:
-            env.randomize_food(n_foods=1, limit=CONFIG.get('food_limit', 12))
-        worm.reset()
-        if MAZE_SPAWN is not None:
-            worm.head.position = Vec3(MAZE_SPAWN)
-    else:
-        env.randomize_sources()
-        if CONFIG['difficulty'] > 0:
-            env.randomize_obstacles(difficulty=state['difficulty'])
-        worm.reset()
-        lim = max(6, CONFIG['map_limit'] - 6)
-        worm.head.position = Vec3(random.uniform(-lim, lim), CONFIG['segment_size'] / 2, random.uniform(-lim, lim))
+    # Novo episódio: alimento pelo currículo (perto→longe do spawn), verme no spawn
+    _maxd = env.food_max_dist(state['episode_count'])
+    try:
+        env.randomize_food_near(SPAWN.x, SPAWN.z, _maxd, n_foods=1)
+    except Exception:
+        env.randomize_food(n_foods=1, limit=CONFIG.get('food_limit', 12))
+    worm.reset()
+    worm.teleport(SPAWN)
     state['episode'] = []
-    state['steps_in_rain'] = 0
-    state['steps_in_danger'] = 0
-    state['steps_in_obstacle'] = 0
     state['encontros_food'] = 0
     state['passos_ate_comer'] = None
     state['hunger'] = 0.0
     state['action_history'] = []
     state['prev_position'] = Vec3(worm.head.position)
     state['prev_dist_food'] = None
-    state['prev_dist_obs'] = None
 
 
 # ─── UPDATE (loop único por frame) ────────────────────────────────────────────
 def update():
-    # ── Câmera segue o verme ──────────────────────────────────────────────────
     cam_pivot.position = lerp(cam_pivot.position, worm.head.position, 0.1)
     worm_light.position = worm.head.position + Vec3(0, 5, 0)
     worm.animate()
 
-    # ── Câmera: órbita ────────────────────────────────────────────────────────
     if mouse.right:
         cam_pivot.rotation_y += mouse.velocity[0] * CONFIG['cam']['rot_speed']
         cam_pivot.rotation_x -= mouse.velocity[1] * CONFIG['cam']['rot_speed']
         cam_pivot.rotation_x  = clamp(cam_pivot.rotation_x, -80, 80)
 
-    # ── Câmera: pan ───────────────────────────────────────────────────────────
     if held_keys['w']: cam_pivot.y += CONFIG['cam']['pan_speed'] * time.dt
     if held_keys['s']: cam_pivot.y -= CONFIG['cam']['pan_speed'] * time.dt
     if held_keys['a']: cam_pivot.x -= CONFIG['cam']['pan_speed'] * time.dt
     if held_keys['d']: cam_pivot.x += CONFIG['cam']['pan_speed'] * time.dt
 
-    # ── Pulso de chuva (legado; inútil em FOOD_MODE mas barato manter) ─────────
-    state['pulse_timer'] += time.dt
-    if state['pulse_timer'] > 0.3:
-        state['pulse_timer'] = 0.0
-        state['rain_pulse']  = 1.0
-    else:
-        state['rain_pulse'] *= (1 - time.dt * 8)
-
-    # ── Partículas de chuva (legado; puladas em FOOD_MODE — economia Lean) ────
-    if not FOOD_MODE:
-        env.update_rain_particles()
-
-    # ── Estado (11-dim alimento / 15-dim legado) e amostragem ──────────────────
-    sensors = get_sensors()
+    sensors = get_sensor_inputs(worm, env, state)
     action = brain.sample_action(sensors)
 
-# ── Direção: currículo professor + política (curriculum learning) ────────
-    #
-    # 'autonomy' controla quanto do movimento vem da rede neural vs do professor
-    # determinístico. Na Fase 4 ela é ditada pelo ESTÁGIO do currículo:
-    #   A → 0 (professor demonstra) ; B → sobe 0→1 ; C → 1 (autonomia plena).
-    # A tecla A força autonomia total (professor desligado) para avaliar o verme.
     stage = current_stage()
     if stage == 'A':
         autonomy = 0.0
@@ -817,97 +740,83 @@ def update():
     if state['force_autonomy']:
         autonomy = 1.0
 
-    # Professor: vire em direção ao alvo (limitado à taxa máxima de giro)
-    teacher_dir = get_teacher_dir()  # Lean dispatch (alimento ou legado)
+    teacher_dir = get_teacher_dir()
     max_turn = CONFIG['turn_rate'] * time.dt
     teacher_turn = max(-max_turn, min(max_turn, signed_angle(worm.direction, teacher_dir)))
 
-    # Política: a ação amostrada define um giro discreto
     policy_turn = TURN_MULTIPLIERS[action] * max_turn
-
-    # Mistura conforme a autonomia (autonomy=0 → 100% professor)
     turn = lerp(teacher_turn, policy_turn, autonomy)
 
-    # Aplica o giro e move (com colisão em obstáculos)
     new_dir = turn_vector(worm.direction, turn)
     if new_dir.length() > 0.01:
         worm.direction = new_dir.normalized()
-    worm.step(time.dt, env)
+    worm.step(time.dt, maze=MAZE, bounce=(VISUAL_MODE or PRESENT_MODE))
+    _last_action[0] = action
 
-    # ── AQUÁRIO (visualização pura): sem coleta de episódio/loops ──────────
-    if VISUAL_MODE:
-        # Só log/HUD de passeio — não conta época, não treina, não reseta cena
-        state['log_timer'] += time.dt
-        if state['log_timer'] >= CONFIG['log_interval']:
-            state['log_timer'] = 0.0
-            if FOOD_MODE:
-                print(f"aquario  acao={ACTIONS[action]:>14}  food_dist={_nearest_dist(worm.head.position, getattr(env, 'food_sources', [])) or 0:.1f}")
-            else:
-                print(f"aquario  acao={ACTIONS[action]:>14}  chuva_dist={_nearest_dist(worm.head.position, env.rain_sources) or 0:.1f}")
-        update_hud_aquarium(action)
-        return
-
-    # ── Recompensa por passo e coleta do episódio (Fases 3/4) ─────────────────
-    reward = get_step_reward()
-
-    # ── Fome E4 + comer-e-reaparecer E2 (só FOOD_MODE; legado intacto) ─────────
-    # Lean: menor lote que responde à pergunta-base — encontro conta época aqui,
-    # sem novo sistema de eventos. hunger_rate pequeno evita saturar o clip.
-    if FOOD_MODE:
+    # ── APRESENTAÇÃO: passeio didático, come e conta, sem treino/CVS ──────
+    if PRESENT_MODE:
+        if state.get('present_eating_flash', 0.0) > 0:
+            state['present_eating_flash'] = max(
+                0.0, state['present_eating_flash'] - time.dt)
         _d_food = _nearest_dist(worm.head.position, getattr(env, 'food_sources', []))
         _fr = CONFIG.get('food_radius', 3.0)
         if _d_food is not None and _d_food < _fr:
-            state['encontros_food'] += 1
-            if state['passos_ate_comer'] is None:
-                state['passos_ate_comer'] = len(state['episode']) + 1
-            state['hunger'] = 0.0
-            # T8: respawn mantém o schedule do episódio (perto→longe do worm)
+            state['foods_eaten_total'] = state.get('foods_eaten_total', 0) + 1
+            state['present_eating_flash'] = 2.5
             _maxd_eat = env.food_max_dist(state['episode_count'])
             env.eat_and_respawn(
                 min(env.food_sources,
                     key=lambda s: (s.position - worm.head.position).length()),
                 limit=_maxd_eat,
                 near=(worm.head.position.x, worm.head.position.z))
-        else:
-            state['hunger'] = min(1.0, state['hunger'] + state['hunger_rate'])
+        update_hud_present(action)
+        return
 
-    # ── Penalidade por repetição de ação (Fase 7: anti-colapso) ──────────────
-    # Se o verme escolhe a mesma ação muitas vezes seguidas, penaliza para
-    # quebrar o loop "anda reto / sempre vira esquerda".
-    state['action_history'].append(action)
-    window = CONFIG['action_repeat_window']
-    if len(state['action_history']) >= window:
-        recent = state['action_history'][-window:]
-        if len(set(recent)) == 1:
-            reward -= CONFIG['action_repeat_penalty']
+    if VISUAL_MODE:
+        _d_food = _nearest_dist(worm.head.position, getattr(env, 'food_sources', []))
+        _fr = CONFIG.get('food_radius', 3.0)
+        if _d_food is not None and _d_food < _fr:
+            state['foods_eaten_total'] = state.get('foods_eaten_total', 0) + 1
+            state['hunger'] = 0.0
+            _maxd_eat = env.food_max_dist(state['episode_count'])
+            env.eat_and_respawn(
+                min(env.food_sources,
+                    key=lambda s: (s.position - worm.head.position).length()),
+                limit=_maxd_eat,
+                near=(worm.head.position.x, worm.head.position.z))
+        state['log_timer'] += time.dt
+        if state['log_timer'] >= CONFIG['log_interval']:
+            state['log_timer'] = 0.0
+            print(f"aquario  acao={ACTIONS[action]:>14}  food_dist={_nearest_dist(worm.head.position, getattr(env, 'food_sources', [])) or 0:.1f}")
+        update_hud_aquarium(action)
+        return
+
+    reward = calculate_reward(worm, env, state, action=action)
+
+    # ── Comer e reaparecer + fome ──────────────────────────────────────────
+    _d_food = _nearest_dist(worm.head.position, getattr(env, 'food_sources', []))
+    _fr = CONFIG.get('food_radius', 3.0)
+    if _d_food is not None and _d_food < _fr:
+        state['encontros_food'] += 1
+        if state['passos_ate_comer'] is None:
+            state['passos_ate_comer'] = len(state['episode']) + 1
+        state['hunger'] = 0.0
+        _maxd_eat = env.food_max_dist(state['episode_count'])
+        env.eat_and_respawn(
+            min(env.food_sources,
+                key=lambda s: (s.position - worm.head.position).length()),
+            limit=_maxd_eat,
+            near=(worm.head.position.x, worm.head.position.z))
+    else:
+        state['hunger'] = min(1.0, state['hunger'] + state['hunger_rate'])
 
     teacher = teacher_action()
     state['episode'].append((sensors, action, reward, teacher))
     state['total_reward'] += reward
 
-    # ── Métricas do episódio (critério de aceite da Fase 4) ───────────────────
-    if FOOD_MODE:
-        # Lean: chegada_chuva espelha encontro p/ compat; métrica real vai p/ CSV novo
-        dist_food = _nearest_dist(worm.head.position, getattr(env, 'food_sources', []))
-        if dist_food is not None and dist_food < CONFIG.get('food_radius', 3.0):
-            state['steps_in_rain'] += 1
-    else:
-        dist_rain  = _nearest_dist(worm.head.position, env.rain_sources)
-        dist_light = _nearest_dist(worm.head.position, env.light_sources)
-        if dist_rain is not None and dist_rain < CONFIG['arrival_radius']:
-            state['steps_in_rain'] += 1
-        if dist_light is not None and dist_light < CONFIG['arrival_radius']:
-            state['steps_in_danger'] += 1
-    # Fase 15: colisão com obstáculo
-    dist_obs = _nearest_dist(worm.head.position, env.obstacles)
-    if dist_obs is not None and dist_obs < CONFIG['obstacle_radius']:
-        state['steps_in_obstacle'] += 1
-
-    # ── Treino episódico: chega em H passos → treina e troca a cena ───────────
     if len(state['episode']) >= CONFIG['episode_steps']:
         finish_episode()
 
-    # ── Log periódico ─────────────────────────────────────────────────────────
     state['log_timer'] += time.dt
     if state['log_timer'] >= CONFIG['log_interval']:
         state['log_timer'] = 0.0
@@ -918,68 +827,46 @@ def update():
             f"autonomia={autonomy*100:.0f}%"
         )
 
-    # ── HUD (Fase 5): métricas na tela ────────────────────────────────────────
     update_hud()
 
 
 # ─── INPUT ────────────────────────────────────────────────────────────────────
 def input(key):
 
-    # ── Zoom ──────────────────────────────────────────────────────────────────
     if key == 'scroll up':
         camera.z = min(CONFIG['cam']['min_zoom'] * -1, camera.z + CONFIG['cam']['zoom_speed'])
     if key == 'scroll down':
         camera.z = max(CONFIG['cam']['max_zoom'] * -1, camera.z - CONFIG['cam']['zoom_speed'])
 
-    # ── Modos do editor ───────────────────────────────────────────────────────
-    # Cada tecla alterna o modo ativo. Pressionar a mesma tecla duas vezes
-    # cancela o modo (volta para 'none') — comportamento toggle.
-    if key == '1':
-        editor['mode'] = 'place_light' if editor['mode'] != 'place_light' else 'none'
-        print(f"  Modo: {editor['mode']}")
+    # Apresentação: tela limpa — sem editor, professor, save/load ou grade.
+    if PRESENT_MODE and key in ('1', '3', 'a', 's', 'l', 'p'):
+        print("  (modo Apresentação: tecla desativada p/ manter a tela limpa)")
+        return
 
-    if key == '2':
-        editor['mode'] = 'place_rain' if editor['mode'] != 'place_rain' else 'none'
+    if key == '1':
+        editor['mode'] = 'place_food' if editor['mode'] != 'place_food' else 'none'
         print(f"  Modo: {editor['mode']}")
 
     if key == '3':
         editor['mode'] = 'delete' if editor['mode'] != 'delete' else 'none'
         print(f"  Modo: {editor['mode']}")
 
-    # ── Clique esquerdo: ação do modo atual ───────────────────────────────────
     if key == 'left mouse down' and editor['mode'] != 'none':
 
         if editor['mode'] == 'delete':
-            # mouse.hovered_entity retorna a entidade sob o cursor, se houver.
-            # Verificamos se é uma fonte conhecida antes de destruir.
             target = mouse.hovered_entity
-            if target and (target in env.light_sources or target in env.rain_sources):
+            if target and target in env.food_sources:
                 env.delete_source(target)
 
         else:
-            # camera.raycast dispara um raio da câmera até o mouse e retorna o
-            # ponto de interseção com o collider atingido (ground_collider).
             hit = camera.raycast(distance=200, ignore=[worm.head] + worm.segments)
             if hit.hit:
                 pos = hit.world_point
-                if editor['mode'] == 'place_light':
-                    env.place_light(pos)
-                elif editor['mode'] == 'place_rain':
-                    env.place_rain(pos)
+                if editor['mode'] == 'place_food':
+                    env.place_food(pos)
 
-    # ── Outras teclas ─────────────────────────────────────────────────────────
     if key == 'r':
         reset()
-
-    if key == 'o':
-        # Cicla nível de dificuldade 0→1→2→3→0 (Fase 15)
-        state['difficulty'] = (state['difficulty'] + 1) % 4
-        CONFIG['difficulty'] = state['difficulty']
-        env.clear_obstacles()
-        if state['difficulty'] > 0:
-            env.randomize_obstacles(difficulty=state['difficulty'])
-        lvl = CONFIG['difficulty_levels'][state['difficulty']]
-        print(f"  Dificuldade: {lvl['label']} ({state['difficulty']}) — {lvl['n_obstacles']} obstaculos")
 
     if key == 'a':
         state['force_autonomy'] = not state['force_autonomy']
@@ -1001,7 +888,6 @@ def input(key):
             print(f"  Nao ha pesos em {CONFIG['weights_file']}")
 
     if key == 'escape':
-        # ESC cancela o modo ativo primeiro; segundo ESC fecha o programa
         if editor['mode'] != 'none':
             editor['mode'] = 'none'
             print("  Modo cancelado.")
@@ -1009,31 +895,32 @@ def input(key):
             quit()
 
 
-print("\n-- Verme Neural ---------------------------------------")
-if VISUAL_MODE:
+print("\n-- Verme Neural: terreno limpo + alimento -----------------")
+print(f"  Terreno limpo | estado 8-dim | objetivo: COMER")
+if PRESENT_MODE:
+    print("  MODO APRESENTACAO: só o verme + didático (sem treino, sem CSV)")
+    print("  Teclas ativas: scroll zoom, botão direito orbita, R reinicia, ESC sai")
+elif VISUAL_MODE:
     print("  MODO VISUALIZACAO: passeio livre, sem treino (professor desligado)")
-    if EVAL_EPISODES:
-        print(f"  Roda {EVAL_EPISODES} episodios e fecha")
+    if EPISODE_LIMIT:
+        print(f"  Roda {EPISODE_LIMIT} episodios e fecha")
 elif EVAL_MODE:
     print("  MODO AVALIACAO: professor desligado, sem treino")
-    print("  carrega pesos.json (politica salva) e usa a temperatura de decisao")
-    if EVAL_EPISODES:
-        print(f"  Roda {EVAL_EPISODES} episodios, salva pesos e fecha")
-elif EVAL_EPISODES:
-    print(f"  MODO TREINO com limite: {EVAL_EPISODES} episodios, salva pesos e fecha")
+    if EPISODE_LIMIT:
+        print(f"  Roda {EPISODE_LIMIT} episodios, salva pesos e fecha")
+elif EPISODE_LIMIT:
+    print(f"  MODO TREINO com limite: {EPISODE_LIMIT} episodios, salva pesos e fecha")
 print("  Botão direito + mouse -> orbitar câmera")
 print("  WASD                  -> mover foco da câmera")
 print("  Scroll                -> zoom")
 print("  R                     -> reiniciar verme e cérebro")
-print("  O                     -> ciclar dificuldade 0 LIVRE -> 3 DIFICIL (pedras)")
 print("  A                     -> ligar/desligar PROFESSOR (autonomia total)")
 print("  P                     -> grade de setas da política aprendida")
 print("  S / L                 -> salvar / carregar pesos (pesos.json)")
 print("  ESC                   -> cancelar modo / sair")
 print("  -- Editor -----------------------------------------")
-print("  [1] + clique esquerdo -> colocar fonte de LUZ")
-print("  [2] + clique esquerdo -> colocar fonte de CHUVA")
-print("  [3] + clique esquerdo -> deletar bloco")
+print("  [1] + clique esquerdo -> colocar ALIMENTO")
+print("  [3] + clique esquerdo -> deletar alimento")
 print("  (pressione a tecla de modo novamente para cancelar)")
 print("---------------------------------------------------------\n")
 

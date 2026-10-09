@@ -69,42 +69,83 @@ class Worm:
             idx = min(int((i + 1) * CONFIG['segment_gap'] * (CONFIG['speed'] / 4)), len(self.history) - 1)
             seg.position = self.history[idx]
 
-    def step(self, dt, env=None):
-        """Move a cabeça conforme self.direction, limitado ao mapa e com colisão em obstáculos."""
-        # ── Teste de colisão simples (Fase 15): cancela movimento se colidiria
-        if env is not None and getattr(env, 'obstacles', []):
-            next_pos = self.head.position + self.direction * CONFIG['speed'] * dt
-            blocked = False
-            for obs in env.obstacles:
-                if (Vec3(next_pos.x, 0, next_pos.z) - Vec3(obs.x, 0, obs.z)).length() < CONFIG['obstacle_radius']:
-                    blocked = True
-                    break
-            if blocked:
-                # Desliza lateralmente em vez de atravessar: vira levemente
-                self.direction = Vec3(self.direction.z, 0, -self.direction.x).normalized() * 0.6 + self.direction * 0.4
-                self.direction = self.direction.normalized()
-                # Não avança neste frame
-                self.update_segments()
-                if self.direction.length() > 0:
-                    self.head.look_at(self.head.position + self.direction)
-                return
+    def step(self, dt, maze=None, bounce=False):
+        """Move a cabeça conforme self.direction, com colisão deslizante.
 
-        self.head.position += self.direction * CONFIG['speed'] * dt
-        self.head.x = max(-CONFIG['map_limit'], min(CONFIG['map_limit'], self.head.x))
-        self.head.z = max(-CONFIG['map_limit'], min(CONFIG['map_limit'], self.head.z))
-        self.head.y = CONFIG['segment_size'] / 2
+        maze: objeto com .free(x,z,clearance) ou None (terreno limpo).
+        Desliza em X depois Z: nunca atravessa parede, nunca prende.
+        bounce (só passeio visual/apresentação): ao encostar na borda do mapa,
+        reflete a direção em vez de empurrar a grade para sempre (no treino é
+        False: a física do treino/eval/headless fica intacta).
+        """
+        import math as _math
+        nx = self.head.position.x + self.direction.x * CONFIG['speed'] * dt
+        nz = self.head.position.z + self.direction.z * CONFIG['speed'] * dt
+        lim = CONFIG['map_limit']
+        hit_x = abs(nx) >= lim
+        hit_z = abs(nz) >= lim
+        nx = max(-lim, min(lim, nx))
+        nz = max(-lim, min(lim, nz))
+        radius = CONFIG.get('worm_radius', 1.5)
+        if maze is not None:
+            try:
+                free = maze.free
+            except AttributeError:
+                free = lambda x, z, clearance=radius: True
+            cx, cz = self.head.position.x, self.head.position.z
+            # slide: tenta X, depois Z (qualquer direção, inclusive descer)
+            if free(nx, cz, clearance=radius):
+                cx = nx
+            if free(cx, nz, clearance=radius):
+                cz = nz
+            nx, nz = cx, cz
+        # Atribuição do Vec3 INTEIRO (via setter): mutar .position.x/.z num
+        # objeto temporário não move a entidade na cena (regressão corrigida).
+        self.head.position = Vec3(nx, CONFIG['segment_size'] / 2, nz)
+
+        # Passeio: quicou na borda -> volta p/ dentro (nunca moe a grade).
+        if bounce and (hit_x or hit_z):
+            if hit_x:
+                self.direction.x *= -1
+            if hit_z:
+                self.direction.z *= -1
+            if self.direction.length() > 0.01:
+                self.direction = self.direction.normalized()
 
         self.update_segments()
 
         if self.direction.length() > 0:
             self.head.look_at(self.head.position + self.direction)
 
-    def reset(self):
-        """Reposiciona o corpo no centro e zera o histórico."""
-        self.head.position = Vec3(0, CONFIG['segment_size'] / 2, 0)
+    def teleport(self, pos):
+        """Coloca cabeca + corpo + historico em `pos` (sem rastro esticado).
+
+        Sem isso, resetar a cabeca p/ o spawn com o historico ainda na origem
+        empilhava os 12 segmentos na origem (verme "bugado"/esticado por ~2s).
+        """
+        self.head.position = Vec3(pos)
         for i, seg in enumerate(self.segments):
             seg.position = self.head.position - Vec3(0, 0, (i + 1) * CONFIG['segment_gap'])
         self.history.clear()
         for _ in range(self.max_history_length):
             self.history.append(Vec3(self.head.position))
-        self.direction = Vec3(0, 0, 1)
+
+    def reset(self, heading=None):
+        """Reposiciona o corpo no centro e zera o histórico.
+
+        heading: angulo rad (0=L, pi/2=N...); None = CONFIG['spawn_heading']
+        ('random' = qualquer direcao, 'fixed' = norte legado (0,0,1)).
+        Diagonais saem naturalmente (angulo continuo).
+        """
+        import math as _math
+        import random as _random
+        self.teleport(Vec3(0, CONFIG['segment_size'] / 2, 0))
+        if heading is None:
+            mode = CONFIG.get('spawn_heading', 'random')
+            if mode == 'random':
+                heading = _random.uniform(0, 2 * _math.pi)
+            else:
+                heading = _math.pi / 2  # norte legado
+        self.direction = Vec3(_math.cos(heading), 0, _math.sin(heading))
+        if self.direction.length() > 0.01:
+            self.direction = self.direction.normalized()

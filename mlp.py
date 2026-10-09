@@ -516,6 +516,13 @@ def load_brain(path, actor, critic=None):
         if actor.n_hidden2 is None and actor_data.get('n_hidden2') is not None:
             print(f"  AVISO: pesos ignorados — arquitetura 3 camadas vs esperado 2 camadas")
             return False
+        # L15: checa n_outputs (n_acoes) — evita carregar Critic (1 saída) em
+        # Policy/Q (5 saídas) e vice-versa, que antes corrompia silenciosamente.
+        # Q(5) vs Policy(5) passam (mesma forma; semântica Q≠logits documentada).
+        saved_bias = actor_data.get('bias_output', [])
+        if saved_bias and len(saved_bias) != actor.n_outputs:
+            print(f"  AVISO: pesos ignorados — n_outputs salvo={len(saved_bias)} vs esperado={actor.n_outputs} (Policy/Q vs Critic?)")
+            return False
         if 'actor' in data:
             actor.set_params(data['actor'])
         else:
@@ -543,7 +550,7 @@ ACTIONS = ['esquerda', 'frente_esquerda', 'frente', 'frente_direita', 'direita']
 # Usado para calcular advantage via GAE:  A_t = δ_t + γλ·δ_{t+1} + ...
 # onde δ_t = r_t + γV(s_{t+1}) − V(s_t)  (erro TD).
 #
-# Arquitetura: idêntica ao actor (8→16→1), mas com saída identidade (escalar).
+# Arquitetura: idêntica ao actor (8→32→16→1), mas com saída identidade (escalar).
 
 class CriticNetwork(MLP):
 
@@ -1010,3 +1017,88 @@ class PolicyNetwork(MLP):
             'mean_entropy'  : total_entropy / len(episode),
             'action_counts' : action_counts,
         }
+
+
+# ─── Q-Network / DQN (L14 — alternativa radical value-based) ───────────────
+#
+# Troca a dinamica: em vez de softmax + policy-gradient (que colapsa p/ 1 acao
+# em 22/22 runs L5+L7+L8, entropia 0.000), aprende Q(s,a) por TD + age por
+# epsilon-greedy. Exploracao e externa (epsilon), nao depende de entropia.
+#
+#   target = r + gamma * max_a' Q_target(s', a')   (0 se done)
+#   loss   = 0.5 * (Q(s,a) - target)^2  →  grad_z[a] = (Q_a - target)
+
+class QNetwork(MLP):
+
+    def __init__(self, n_inputs, n_hidden=32, n_actions=5, n_hidden2=None):
+        if n_hidden2 is None:
+            n_hidden2 = CONFIG.get('n_hidden2', None)
+        super().__init__(n_inputs, n_hidden, n_actions, 'tanh', 'identity',
+                         n_hidden2=n_hidden2)
+        self.n_actions = n_actions
+        self.learning_rate = CONFIG['learning_rate']
+
+    def q_values(self, inputs):
+        """Q(s, .) — vetor com um valor por acao."""
+        return self.forward(inputs)
+
+    def act(self, inputs, epsilon=0.1):
+        """Epsilon-greedy: aleatoria c/ prob epsilon, senao argmax Q."""
+        if random.random() < epsilon:
+            return random.randrange(self.n_actions)
+        qs = self.forward(inputs)
+        return max(range(self.n_actions), key=lambda a: qs[a])
+
+    def sync_from(self, other):
+        """Copia pesos (rede-alvo <- online)."""
+        import copy as _copy
+        p = _copy.deepcopy(other.params())
+        self.set_params(p)
+
+    def td_update(self, batch, target_net=None, gamma=None, learning_rate=None,
+                  regularization=None, reward_scale=None):
+        """Update TD em lote: batch = [(s, a, r, s_next, done), ...]."""
+        if gamma is None:
+            gamma = CONFIG['gamma']
+        if learning_rate is None:
+            learning_rate = self.learning_rate
+        if regularization is None:
+            regularization = CONFIG['regularization']
+        if reward_scale is None:
+            # L16: Q aprende em escala crua [-1,1] (estável). O PPO usa 5.0
+            # (CONFIG reward_scale); herdar 5.0 explodia o target e o clipping
+            # [-10,10] mentia. Override: --set=q_reward_scale=X ou passe explicito.
+            reward_scale = CONFIG.get('q_reward_scale', 1.0)
+        if target_net is None:
+            # L16: sem rede-alvo, o Q usa a própria prova como gabarito
+            # (self-bootstrap: anda em círculo). Mantido p/ compat, com aviso.
+            print("  AVISO L16: td_update sem target_net — usando self (instável)")
+            target_net = self
+
+        self.grad_acc = None
+        total_loss = 0.0
+        for item in batch:
+            s, a, r, s_next, done = (tuple(item) + (None,) * 5)[:5]
+            rs = float(r) * float(reward_scale)
+            if done:
+                target = rs
+            else:
+                q_next = target_net.forward(list(s_next))
+                target = rs + gamma * max(q_next)
+                target = max(-10.0, min(10.0, target))
+            q_pred = self.forward(list(s))
+            err = max(-10.0, min(10.0, q_pred[a] - target))
+            total_loss += 0.5 * err * err
+            # Convencao do projeto: theta += lr*grad (ascenso). P/ DESCER o MSE,
+            # grad = (target - Q) = -err (o Critic legado usa +err e diverge;
+            # aqui L14 usa o sinal correto).
+            grad_z = [0.0] * self.n_actions
+            grad_z[a] = -err
+            self.backward_from_output_grad(grad_z)
+            self.accumulate_grads()
+        # L15: accumulate SOMA N gradientes e apply aplica 1x — sem dividir, o
+        # passo efetivo é lr*N (batch 200 × lr 0.05 = 10.0: explosão). Divide p/
+        # passo médio estável. Muda a dinâmica vs smoke L14: revalidar curvas.
+        n = max(1, len(batch))
+        self.apply_accumulated(learning_rate / n, regularization)
+        return {'q_loss': total_loss / n, 'batch': len(batch)}

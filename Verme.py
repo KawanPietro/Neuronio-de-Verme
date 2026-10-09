@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-# Verme.py — HUB central do projeto Neurônio de Verme
+# Verme.py — HUB central do projeto Neurônio de Verme (terreno limpo + alimento)
 #
 # Permite transitar entre todos os modos sem decorar flags:
-#   [1] Treino      — aprende do zero (16 fases, currículo A/B/C)
-#   [2] Avaliação   — testa pesos salvos (professor desligado)
+#   [1] Treino      — aprende do zero em terreno limpo (currículo A/B/C)
+#   [2] Avaliação   — testa pesos salvos, sem treino
 #   [3] Visualização — passeio livre, sem treino (só observar)
-#   [4] Dificuldade — troca o nível de obstáculos (0 LIVRE → 3 DIFICIL)
-# Teclas em jogo: O (cicla dificuldade), A (professor), P (grade), R/S/L, ESC
+#   [4] Apresentação — como o visual, mas HUD só didático (p/ apresentar)
+# Teclas em jogo: A (professor), P (grade), R/S/L, 1/3 editor, ESC
+# (na Apresentação, A/P/S/L/1/3 ficam desativadas p/ manter a tela limpa)
 #
 # Rode com:  python Verme.py   ou   python main.py [flags]
 
@@ -14,24 +15,19 @@ import subprocess
 import sys
 import os
 
-from config import CONFIG
-
-LVL = CONFIG['difficulty_levels']
-
 def banner():
     print("\n===============================================")
     print("  NEURONIO DE VERME — HUB (Verme.py)")
     print("===============================================")
-    print("  Projeto 16 fases: do sensor ao PPO+buffer")
-    print("  Estados: 11 dims | Ações: 5 | Cérebro: 8→16→5 + Critic")
-    print("  Dificuldade atual (CONFIG):", CONFIG['difficulty'], "-", LVL[CONFIG['difficulty']]['label'])
+    print("  Terreno limpo + alimento 8-dim | Acoes: 5 | Cerebro: 8->32->16->5 + Critic")
+    print("  (labirinto gigante futuro: 3-4x maior, a planejar)")
 
 def menu():
     print("\n--- MODOS ---")
-    print("  [1] TREINO        — aprende (curriculo A10/B20/C..), salva pesos.json")
+    print("  [1] TREINO        — aprende em terreno limpo, salva pesos.json")
     print("  [2] AVALIACAO     — testa pesos salvos, sem treino")
     print("  [3] VISUALIZACAO  — passeio livre, sem treino, sem professor")
-    print("  [4] DIFICULDADE   — escolher nivel de obstaculos")
+    print("  [4] APRESENTACAO  — só o verme + didático (p/ apresentar o trabalho)")
     print("  [5] INFO          — ver fases e controles")
     print("  [0] SAIR")
     try:
@@ -40,27 +36,10 @@ def menu():
         print("\n  [sem entrada — iniciando VISUALIZACAO direto]")
         return "3"
     raw = raw.strip()
-    # Se o terminal colou o caminho do arquivo (ex: :/Users/.../Verme.py") ignora
     if ".py" in raw or ":/" in raw or ":\\" in raw:
         print(f"  (ignorado input invalido: {raw!r})")
         return ""
     return raw
-
-def ask_difficulty():
-    print("\n--- DIFICULDADE ---")
-    for k in sorted(LVL):
-        print(f"  [{k}] {LVL[k]['label']:7s} — {LVL[k]['n_obstacles']} pedras x{LVL[k]['obstacle_scale']}")
-    raw = input("  Escolha dificuldade [0-3] (ENTER=cancelar): ").strip()
-    if raw == "":
-        return None
-    try:
-        d = int(raw)
-        if d in LVL:
-            return d
-    except:
-        pass
-    print("  Invalido.")
-    return None
 
 def ask_int(msg, default=None):
     s = input(msg).strip()
@@ -80,7 +59,6 @@ def run_main(args):
         return
     cmd = [sys.executable, main_py] + args
     print(f"\n> {' '.join(cmd)}  (cwd={base})")
-    # Usa o mesmo Python/venv que rodou Verme.py
     try:
         result = subprocess.run(cmd, cwd=base)
         if result.returncode != 0:
@@ -100,67 +78,60 @@ def run_main(args):
 
 def info():
     print("""
+  OBJETIVO: encontrar o alimento em terreno limpo no menor tempo.
+
   FASES:
-   0 Higiene | 1 Sensores 11-dim | 2 MLP+Policy | 3 REINFORCE | 4 Curriculo A/B/C
-   5 HUD/CSV | 6 Robustez | 7 Recompensa | 8 A2C | 9 PPO | 13 Replay Buffer | 15 Obstaculos
+   0 Higiene | 1 Sensores 8-dim | 2 MLP+Policy | 3 REINFORCE | 4 Curriculo A/B/C
+   5 HUD/CSV | 6 Robustez | 7 Recompensa | 8 A2C | 9 PPO | 13 Replay Buffer
+   F8 Reformulacao alimento + olfato/fome + curriculo de distancia (sem obstáculos)
 
   CONTROLES EM JOGO:
    Botao direito + mouse  orbitar | WASD mover foco | Scroll zoom
-   R reiniciar | O cicla dificuldade (0→3) | A professor on/off | P grade | S/L salvar/carregar | ESC sair
+   R reiniciar | A professor on/off | P grade | S/L salvar/carregar | ESC sair
+   [1] colocar ALIMENTO | [3] deletar ALIMENTO
 
-  LABORATORIO: 72x72, mapa 32, 4 niveis (tecla O ou --difficulty=N)
-  EQUIVALENTES diretos (sem HUB):
-   python main.py --episodes=200 --difficulty=1
-   python main.py --eval --episodes=50 --difficulty=2
-   python main.py --visual --difficulty=0
-    """)
+   TERRENO: mapa 32 limpo (só verme + alimento). Labirinto gigante 3-4x a planejar.
+   EQUIVALENTES diretos (sem HUB):
+    python main.py --episodes=100 --set=food_curriculum=1
+    python main.py --eval --episodes=100
+    python main.py --visual
+    python main.py --present
+      """)
 
 def main_loop():
-    difficulty = CONFIG['difficulty']
     fails = 0
     while True:
         banner()
-        print(f"  Ultima dificuldade escolhida: {difficulty} ({LVL[difficulty]['label']})")
-        print("  Dica: digite 1-5 e ENTER. Ou rode direto: python Verme.py --visual")
+        print("  Terreno: LIMPO (só verme + alimento)")
+        print("  Dica: digite 1-4,5 e ENTER. Ou rode direto: python Verme.py --present")
         ch = menu()
         if ch == "":
             fails += 1
             if fails >= 3:
-                print("  Muitas entradas invalidas — iniciando VISUALIZACAO (dificuldade 1)")
-                run_main(["--visual", f"--difficulty={difficulty}"])
+                print("  Muitas entradas invalidas — iniciando VISUALIZACAO")
+                run_main(["--visual"])
             continue
         fails = 0
         if ch == "1":
-            d = ask_difficulty()
-            if d is not None:
-                difficulty = d
             eps = ask_int(f"  Episodios de treino [default 100]: ", default=100)
-            run_main([f"--episodes={eps}", f"--difficulty={difficulty}"])
+            run_main([f"--episodes={eps}"])
         elif ch == "2":
-            d = ask_difficulty()
-            if d is not None:
-                difficulty = d
             eps = ask_int(f"  Episodios de avaliacao [default 50]: ", default=50)
-            run_main(["--eval", f"--episodes={eps}", f"--difficulty={difficulty}"])
+            run_main(["--eval", f"--episodes={eps}"])
         elif ch == "3":
-            d = ask_difficulty()
-            if d is not None:
-                difficulty = d
             print("  Visualizacao: sem --episodes = roda infinito ate ESC")
             raw = input("  Episodios (ENTER=infinito): ").strip()
             if raw == "":
-                run_main(["--visual", f"--difficulty={difficulty}"])
+                run_main(["--visual"])
             else:
                 try:
                     eps = int(raw)
-                    run_main(["--visual", f"--episodes={eps}", f"--difficulty={difficulty}"])
+                    run_main(["--visual", f"--episodes={eps}"])
                 except:
-                    run_main(["--visual", f"--difficulty={difficulty}"])
+                    run_main(["--visual"])
         elif ch == "4":
-            d = ask_difficulty()
-            if d is not None:
-                difficulty = d
-                print(f"  Dificuldade agora {difficulty} ({LVL[difficulty]['label']}) — sera usada no proximo run")
+            print("  Apresentacao: HUD só didático, sem números de treino.")
+            run_main(["--present"])
         elif ch == "5":
             info()
             input("  ENTER para voltar: ")
@@ -171,11 +142,8 @@ def main_loop():
             print("  Opcao invalida.")
 
 if __name__ == "__main__":
-    # Garante que rodar por duplo-clique (cwd diferente) ainda acha os modulos
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    # Se chamado com args, repassa direto para main.py (compat: python Verme.py --eval ...)
     if len(sys.argv) > 1:
-        # Ex: python Verme.py --eval --episodes=20  -> python main.py --eval --episodes=20
         print(f"Verme.py repassando args para main.py: {sys.argv[1:]}")
         run_main(sys.argv[1:])
         sys.exit(0)
